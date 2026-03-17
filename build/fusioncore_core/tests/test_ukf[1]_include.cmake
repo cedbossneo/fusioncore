@@ -1,0 +1,5 @@
+if(EXISTS "/mnt/c/stealth/ROS/fusioncore/build/fusioncore_core/tests/test_ukf[1]_tests.cmake")
+  include("/mnt/c/stealth/ROS/fusioncore/build/fusioncore_core/tests/test_ukf[1]_tests.cmake")
+else()
+  add_test(test_ukf_NOT_BUILT test_ukf_NOT_BUILT)
+endif()
