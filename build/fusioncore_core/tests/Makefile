@@ -217,6 +217,20 @@ test_fusioncore/fast:
 	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f fusioncore_core/tests/CMakeFiles/test_fusioncore.dir/build.make fusioncore_core/tests/CMakeFiles/test_fusioncore.dir/build
 .PHONY : test_fusioncore/fast
 
+# Convenience name for target.
+fusioncore_core/tests/CMakeFiles/test_gnss.dir/rule:
+	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 fusioncore_core/tests/CMakeFiles/test_gnss.dir/rule
+.PHONY : fusioncore_core/tests/CMakeFiles/test_gnss.dir/rule
+
+# Convenience name for target.
+test_gnss: fusioncore_core/tests/CMakeFiles/test_gnss.dir/rule
+.PHONY : test_gnss
+
+# fast build rule for target.
+test_gnss/fast:
+	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f fusioncore_core/tests/CMakeFiles/test_gnss.dir/build.make fusioncore_core/tests/CMakeFiles/test_gnss.dir/build
+.PHONY : test_gnss/fast
+
 test_encoder.o: test_encoder.cpp.o
 .PHONY : test_encoder.o
 
@@ -264,6 +278,30 @@ test_fusioncore.s: test_fusioncore.cpp.s
 test_fusioncore.cpp.s:
 	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f fusioncore_core/tests/CMakeFiles/test_fusioncore.dir/build.make fusioncore_core/tests/CMakeFiles/test_fusioncore.dir/test_fusioncore.cpp.s
 .PHONY : test_fusioncore.cpp.s
+
+test_gnss.o: test_gnss.cpp.o
+.PHONY : test_gnss.o
+
+# target to build an object file
+test_gnss.cpp.o:
+	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f fusioncore_core/tests/CMakeFiles/test_gnss.dir/build.make fusioncore_core/tests/CMakeFiles/test_gnss.dir/test_gnss.cpp.o
+.PHONY : test_gnss.cpp.o
+
+test_gnss.i: test_gnss.cpp.i
+.PHONY : test_gnss.i
+
+# target to preprocess a source file
+test_gnss.cpp.i:
+	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f fusioncore_core/tests/CMakeFiles/test_gnss.dir/build.make fusioncore_core/tests/CMakeFiles/test_gnss.dir/test_gnss.cpp.i
+.PHONY : test_gnss.cpp.i
+
+test_gnss.s: test_gnss.cpp.s
+.PHONY : test_gnss.s
+
+# target to generate assembly for a file
+test_gnss.cpp.s:
+	cd /mnt/c/stealth/ROS/fusioncore/build && $(MAKE) $(MAKESILENT) -f fusioncore_core/tests/CMakeFiles/test_gnss.dir/build.make fusioncore_core/tests/CMakeFiles/test_gnss.dir/test_gnss.cpp.s
+.PHONY : test_gnss.cpp.s
 
 test_imu.o: test_imu.cpp.o
 .PHONY : test_imu.o
@@ -327,6 +365,7 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... test_encoder"
 	@echo "... test_fusioncore"
+	@echo "... test_gnss"
 	@echo "... test_imu"
 	@echo "... test_ukf"
 	@echo "... test_encoder.o"
@@ -335,6 +374,9 @@ help:
 	@echo "... test_fusioncore.o"
 	@echo "... test_fusioncore.i"
 	@echo "... test_fusioncore.s"
+	@echo "... test_gnss.o"
+	@echo "... test_gnss.i"
+	@echo "... test_gnss.s"
 	@echo "... test_imu.o"
 	@echo "... test_imu.i"
 	@echo "... test_imu.s"

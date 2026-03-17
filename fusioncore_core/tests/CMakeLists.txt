@@ -20,8 +20,12 @@ target_link_libraries(test_encoder fusioncore_core GTest::gtest_main Eigen3::Eig
 add_executable(test_fusioncore test_fusioncore.cpp)
 target_link_libraries(test_fusioncore fusioncore_core GTest::gtest_main Eigen3::Eigen)
 
+add_executable(test_gnss test_gnss.cpp)
+target_link_libraries(test_gnss fusioncore_core GTest::gtest_main Eigen3::Eigen)
+
 include(GoogleTest)
 gtest_discover_tests(test_ukf)
 gtest_discover_tests(test_imu)
 gtest_discover_tests(test_encoder)
 gtest_discover_tests(test_fusioncore)
+gtest_discover_tests(test_gnss)
