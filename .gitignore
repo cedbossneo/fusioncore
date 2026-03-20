@@ -47,3 +47,6 @@ log/
 
 # VS Code
 .vscode/
+
+frames_*.gv
+frames_*.pdf
