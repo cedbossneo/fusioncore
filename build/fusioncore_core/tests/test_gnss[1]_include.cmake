@@ -1,5 +1,0 @@
-if(EXISTS "/mnt/c/stealth/ROS/fusioncore/build/fusioncore_core/tests/test_gnss[1]_tests.cmake")
-  include("/mnt/c/stealth/ROS/fusioncore/build/fusioncore_core/tests/test_gnss[1]_tests.cmake")
-else()
-  add_test(test_gnss_NOT_BUILT test_gnss_NOT_BUILT)
-endif()
