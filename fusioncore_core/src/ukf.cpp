@@ -141,6 +141,60 @@ Eigen::Matrix<double, z_dim, 1> UKF::update(
   return innovation;
 }
 
+template <int z_dim>
+void UKF::predict_measurement(
+  const Eigen::Matrix<double, z_dim, 1>& z,
+  const std::function<Eigen::Matrix<double, z_dim, 1>(const StateVector&)>& h,
+  const Eigen::Matrix<double, z_dim, z_dim>& R,
+  Eigen::Matrix<double, z_dim, 1>& innovation_out,
+  Eigen::Matrix<double, z_dim, z_dim>& S_out
+) const {
+  using ZVector = Eigen::Matrix<double, z_dim, 1>;
+  using ZMatrix = Eigen::Matrix<double, z_dim, z_dim>;
+
+  Eigen::MatrixXd sigma = generate_sigma_points();
+  int n_sigma = 2 * n_aug_ + 1;
+
+  Eigen::Matrix<double, z_dim, Eigen::Dynamic> sigma_z(z_dim, n_sigma);
+  for (int i = 0; i < n_sigma; ++i)
+    sigma_z.col(i) = h(sigma.col(i));
+
+  ZVector z_pred = ZVector::Zero();
+  for (int i = 0; i < n_sigma; ++i)
+    z_pred += Wm_[i] * sigma_z.col(i);
+
+  ZMatrix S = R;
+  for (int i = 0; i < n_sigma; ++i) {
+    ZVector z_diff = sigma_z.col(i) - z_pred;
+    S += Wc_[i] * z_diff * z_diff.transpose();
+  }
+
+  innovation_out = z - z_pred;
+  S_out = S;
+}
+
+// Explicit instantiations for predict_measurement
+template void UKF::predict_measurement<1>(
+  const Eigen::Matrix<double, 1, 1>&,
+  const std::function<Eigen::Matrix<double, 1, 1>(const StateVector&)>&,
+  const Eigen::Matrix<double, 1, 1>&,
+  Eigen::Matrix<double, 1, 1>&,
+  Eigen::Matrix<double, 1, 1>&) const;
+
+template void UKF::predict_measurement<3>(
+  const Eigen::Matrix<double, 3, 1>&,
+  const std::function<Eigen::Matrix<double, 3, 1>(const StateVector&)>&,
+  const Eigen::Matrix<double, 3, 3>&,
+  Eigen::Matrix<double, 3, 1>&,
+  Eigen::Matrix<double, 3, 3>&) const;
+
+template void UKF::predict_measurement<6>(
+  const Eigen::Matrix<double, 6, 1>&,
+  const std::function<Eigen::Matrix<double, 6, 1>(const StateVector&)>&,
+  const Eigen::Matrix<double, 6, 6>&,
+  Eigen::Matrix<double, 6, 1>&,
+  Eigen::Matrix<double, 6, 6>&) const;
+
 double UKF::normalize_angle(double angle) {
   while (angle >  M_PI) angle -= 2.0 * M_PI;
   while (angle < -M_PI) angle += 2.0 * M_PI;

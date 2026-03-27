@@ -7,6 +7,36 @@ namespace fusioncore {
 
 // ─── Adaptive noise covariance implementation ─────────────────────────────
 
+// ─── Mahalanobis outlier rejection ────────────────────────────────────────
+
+template <int z_dim>
+bool FusionCore::is_outlier(
+  const Eigen::Matrix<double, z_dim, 1>& innovation,
+  const Eigen::Matrix<double, z_dim, z_dim>& S,
+  double threshold) const
+{
+  // Mahalanobis distance squared: d² = νᵀ · S⁻¹ · ν
+  // .value() extracts scalar from 1x1 matrix — works for all dimensions
+  double d2 = (innovation.transpose() * S.inverse() * innovation).value();
+  return d2 > threshold;
+}
+
+// Explicit instantiations
+template bool FusionCore::is_outlier<1>(
+  const Eigen::Matrix<double, 1, 1>&,
+  const Eigen::Matrix<double, 1, 1>&,
+  double) const;
+
+template bool FusionCore::is_outlier<3>(
+  const Eigen::Matrix<double, 3, 1>&,
+  const Eigen::Matrix<double, 3, 3>&,
+  double) const;
+
+template bool FusionCore::is_outlier<6>(
+  const Eigen::Matrix<double, 6, 1>&,
+  const Eigen::Matrix<double, 6, 6>&,
+  double) const;
+
 void FusionCore::init_adaptive_R() {
   R_imu_         = sensors::imu_noise_matrix(config_.imu);
   R_encoder_     = sensors::encoder_noise_matrix(config_.encoder);
@@ -424,6 +454,18 @@ bool FusionCore::update_gnss_heading(
 
   sensors::GnssHdgNoiseMatrix R =
     sensors::gnss_hdg_noise_matrix(config_.gnss, heading);
+
+  // Mahalanobis outlier rejection for heading
+  if (config_.outlier_rejection) {
+    sensors::GnssHdgMeasurement innovation_pre;
+    sensors::GnssHdgNoiseMatrix S;
+    ukf_.predict_measurement<sensors::GNSS_HDG_DIM>(
+      z, sensors::gnss_hdg_measurement_function, R, innovation_pre, S);
+    if (is_outlier<sensors::GNSS_HDG_DIM>(innovation_pre, S, config_.outlier_threshold_hdg)) {
+      ++hdg_outliers_;
+      return false;
+    }
+  }
 
   ukf_.update<sensors::GNSS_HDG_DIM>(
     z, sensors::gnss_hdg_measurement_function, R);

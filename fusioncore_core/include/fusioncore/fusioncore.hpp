@@ -26,6 +26,16 @@ struct FusionCoreConfig {
   double heading_observable_distance = 5.0;
 
   // Delay compensation — state snapshot buffer
+  // Mahalanobis outlier rejection
+  // Rejects measurements that are statistically implausible.
+  // Threshold is chi-squared percentile for the measurement dimension.
+  // 99.9th percentile recommended — rejects GPS jumps, encoder spikes.
+  bool   outlier_rejection       = true;
+  double outlier_threshold_gnss  = 16.27;  // chi2(3, 0.999) — 3D position
+  double outlier_threshold_imu   = 15.09;  // chi2(6, 0.999) — 6D IMU
+  double outlier_threshold_enc   = 11.34;  // chi2(3, 0.999) — 3D encoder
+  double outlier_threshold_hdg   = 10.83;  // chi2(1, 0.999) — 1D heading
+
   // Adaptive noise covariance
   // Whether to enable adaptive R estimation for each sensor
   bool adaptive_imu     = true;
@@ -186,6 +196,20 @@ private:
   sensors::ImuOrientationNoiseMatrix  R_imu_orient_;
 
   bool adaptive_initialized_ = false;
+
+  // Outlier rejection counters — for status reporting
+  int gnss_outliers_   = 0;
+  int imu_outliers_    = 0;
+  int enc_outliers_    = 0;
+  int hdg_outliers_    = 0;
+
+  // Mahalanobis distance test
+  template <int z_dim>
+  bool is_outlier(
+    const Eigen::Matrix<double, z_dim, 1>& innovation,
+    const Eigen::Matrix<double, z_dim, z_dim>& S,
+    double threshold
+  ) const;
 
   void init_adaptive_R();
 

@@ -33,6 +33,14 @@ fusioncore:
     # Leave empty to use sensor_msgs/Imu heading instead
     gnss.azimuth_topic: ""
 
+    # Mahalanobis outlier rejection
+    # Rejects GPS jumps, encoder spikes, heading outliers
+    outlier_rejection: true
+    outlier_threshold_gnss: 16.27   # chi2(3, 0.999)
+    outlier_threshold_imu: 15.09    # chi2(6, 0.999)
+    outlier_threshold_enc: 11.34    # chi2(3, 0.999)
+    outlier_threshold_hdg: 10.83    # chi2(1, 0.999)
+
     # Adaptive noise covariance
     # Automatically estimates true sensor noise from innovation sequence
     # Set to false to use fixed config params only

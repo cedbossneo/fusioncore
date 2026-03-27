@@ -48,9 +48,6 @@ public:
   void predict(double dt);
 
   // Update step — fuse a measurement
-  // z: measurement vector
-  // h: measurement function (state -> measurement space)
-  // R: measurement noise covariance
   // Returns innovation vector (z - z_pred) for adaptive noise tracking
   template <int z_dim>
   Eigen::Matrix<double, z_dim, 1> update(
@@ -58,6 +55,18 @@ public:
     const std::function<Eigen::Matrix<double, z_dim, 1>(const StateVector&)>& h,
     const Eigen::Matrix<double, z_dim, z_dim>& R
   );
+
+  // Predict measurement without updating state.
+  // Returns innovation and innovation covariance S for Mahalanobis test.
+  // Call this BEFORE update() to check if measurement should be rejected.
+  template <int z_dim>
+  void predict_measurement(
+    const Eigen::Matrix<double, z_dim, 1>& z,
+    const std::function<Eigen::Matrix<double, z_dim, 1>(const StateVector&)>& h,
+    const Eigen::Matrix<double, z_dim, z_dim>& R,
+    Eigen::Matrix<double, z_dim, 1>& innovation_out,
+    Eigen::Matrix<double, z_dim, z_dim>& S_out
+  ) const;
 
   // Get current state estimate
   const State& state() const { return state_; }

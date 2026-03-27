@@ -70,6 +70,12 @@ public:
     declare_parameter("gnss.lever_arm_y", 0.0);
     declare_parameter("gnss.lever_arm_z", 0.0);
 
+    declare_parameter("outlier_rejection",      true);
+    declare_parameter("outlier_threshold_gnss", 16.27);
+    declare_parameter("outlier_threshold_imu",  15.09);
+    declare_parameter("outlier_threshold_enc",  11.34);
+    declare_parameter("outlier_threshold_hdg",  10.83);
+
     declare_parameter("adaptive.imu",     true);
     declare_parameter("adaptive.encoder", true);
     declare_parameter("adaptive.gnss",    true);
@@ -121,6 +127,12 @@ public:
         config.gnss.lever_arm.y,
         config.gnss.lever_arm.z);
     }
+
+    config.outlier_rejection      = get_parameter("outlier_rejection").as_bool();
+    config.outlier_threshold_gnss = get_parameter("outlier_threshold_gnss").as_double();
+    config.outlier_threshold_imu  = get_parameter("outlier_threshold_imu").as_double();
+    config.outlier_threshold_enc  = get_parameter("outlier_threshold_enc").as_double();
+    config.outlier_threshold_hdg  = get_parameter("outlier_threshold_hdg").as_double();
 
     config.adaptive_imu     = get_parameter("adaptive.imu").as_bool();
     config.adaptive_encoder = get_parameter("adaptive.encoder").as_bool();
