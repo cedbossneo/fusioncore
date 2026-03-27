@@ -25,6 +25,9 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   distance_traveled_ = 0.0;
   last_gnss_x_       = 0.0;
   last_gnss_y_       = 0.0;
+
+  // Reset snapshot buffer
+  snapshot_buffer_.clear();
 }
 
 void FusionCore::reset() {
@@ -38,6 +41,88 @@ void FusionCore::reset() {
   heading_source_    = HeadingSource::NONE;
   gnss_pos_set_      = false;
   distance_traveled_ = 0.0;
+}
+
+void FusionCore::save_snapshot() {
+  StateSnapshot snap;
+  snap.timestamp        = last_timestamp_;
+  snap.state            = ukf_.state();
+  snap.last_imu_time    = last_imu_time_;
+  snap.last_encoder_time = last_encoder_time_;
+  snap.last_gnss_time   = last_gnss_time_;
+
+  snapshot_buffer_.push_back(snap);
+
+  // Keep buffer bounded
+  while ((int)snapshot_buffer_.size() > config_.snapshot_buffer_size) {
+    snapshot_buffer_.pop_front();
+  }
+}
+
+// Apply a measurement that arrived late.
+// Finds the closest snapshot before measurement_timestamp,
+// restores that state, calls apply_fn (which does predict_to + update),
+// then re-predicts forward to the current time.
+//
+// Returns false if the measurement is too old or no snapshots exist.
+bool FusionCore::apply_delayed_measurement(
+  double measurement_timestamp,
+  const std::function<void()>& apply_fn
+) {
+  if (snapshot_buffer_.empty()) return false;
+
+  double delay = last_timestamp_ - measurement_timestamp;
+
+  // Too old — drop it
+  if (delay > config_.max_measurement_delay) return false;
+
+  // Not actually delayed — apply normally
+  if (delay <= 0.0) {
+    apply_fn();
+    return true;
+  }
+
+  // Find the snapshot closest to but before measurement_timestamp
+  const StateSnapshot* best = nullptr;
+  for (auto it = snapshot_buffer_.rbegin(); it != snapshot_buffer_.rend(); ++it) {
+    if (it->timestamp <= measurement_timestamp) {
+      best = &(*it);
+      break;
+    }
+  }
+
+  if (!best) {
+    // All snapshots are after measurement — use oldest
+    best = &snapshot_buffer_.front();
+  }
+
+  // Save current state to restore after re-prediction
+  double current_time     = last_timestamp_;
+  double current_imu      = last_imu_time_;
+  double current_encoder  = last_encoder_time_;
+  double current_gnss     = last_gnss_time_;
+
+  // Roll back to snapshot
+  ukf_.init(best->state);
+  last_timestamp_     = best->timestamp;
+  last_imu_time_      = best->last_imu_time;
+  last_encoder_time_  = best->last_encoder_time;
+  last_gnss_time_     = best->last_gnss_time;
+
+  // Apply the delayed measurement (predict_to inside apply_fn handles timing)
+  apply_fn();
+
+  // Re-predict forward to where we were
+  double dt = current_time - last_timestamp_;
+  if (dt > config_.min_dt && dt <= config_.max_dt) {
+    ukf_.predict(dt);
+  }
+  last_timestamp_    = current_time;
+  last_imu_time_     = current_imu;
+  last_encoder_time_ = current_encoder;
+  last_gnss_time_    = current_gnss;
+
+  return true;
 }
 
 void FusionCore::predict_to(double timestamp_seconds) {
@@ -116,6 +201,9 @@ void FusionCore::update_imu(
 
   sensors::ImuNoiseMatrix R = sensors::imu_noise_matrix(config_.imu);
   ukf_.update<sensors::IMU_DIM>(z, sensors::imu_measurement_function, R);
+
+  // Save snapshot for delay compensation
+  save_snapshot();
 
   last_imu_time_ = timestamp_seconds;
   ++update_count_;
@@ -203,11 +291,37 @@ bool FusionCore::update_gnss(
 
   if (!fix.is_valid(config_.gnss)) return false;
 
-  predict_to(timestamp_seconds);
-
   // Track distance for GPS-track heading observability
   update_distance_traveled(fix.x, fix.y);
 
+  // Check if this measurement is delayed
+  bool is_delayed = (last_timestamp_ - timestamp_seconds) > config_.min_dt;
+
+  if (is_delayed) {
+    // Apply with retrodiction
+    bool applied = apply_delayed_measurement(timestamp_seconds, [&]() {
+      predict_to(timestamp_seconds);
+      apply_gnss_update(timestamp_seconds, fix);
+    });
+    if (!applied) return false;
+    last_gnss_time_ = timestamp_seconds;
+    ++update_count_;
+    return true;
+  }
+
+
+  predict_to(timestamp_seconds);
+  apply_gnss_update(timestamp_seconds, fix);
+
+  last_gnss_time_ = timestamp_seconds;
+  ++update_count_;
+  return true;
+}
+
+void FusionCore::apply_gnss_update(
+  double timestamp_seconds,
+  const sensors::GnssFix& fix)
+{
   sensors::GnssPosMeasurement z;
   z[0] = fix.x;
   z[1] = fix.y;
@@ -215,18 +329,6 @@ bool FusionCore::update_gnss(
 
   sensors::GnssPosNoiseMatrix R =
     sensors::gnss_pos_noise_matrix(config_.gnss, fix);
-
-  // Lever arm logic — only apply when heading is GENUINELY validated
-  // from an independent source. This is the proper fix for peci1's
-  // observability concern: we don't trust yaw_variance alone because
-  // the filter can artificially reduce variance without real heading info.
-  //
-  // heading_validated_ is only set true when:
-  //   - dual antenna heading message received (DUAL_ANTENNA)
-  //   - IMU orientation message received (IMU_ORIENTATION)
-  //   - robot moved >= heading_observable_distance meters (GPS_TRACK)
-  //
-  // Before any of these, lever arm is disabled regardless of yaw_variance.
 
   bool use_lever_arm = !config_.gnss.lever_arm.is_zero() && heading_validated_;
 
@@ -238,10 +340,6 @@ bool FusionCore::update_gnss(
     ukf_.update<sensors::GNSS_POS_DIM>(
       z, sensors::gnss_pos_measurement_function, R);
   }
-
-  last_gnss_time_ = timestamp_seconds;
-  ++update_count_;
-  return true;
 }
 
 bool FusionCore::update_gnss_heading(

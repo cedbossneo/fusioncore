@@ -7,6 +7,8 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <deque>
+#include <functional>
 
 namespace fusioncore {
 
@@ -21,6 +23,13 @@ struct FusionCoreConfig {
   // Minimum distance robot must travel (meters) before heading is considered
   // geometrically observable from GPS track alone.
   double heading_observable_distance = 5.0;
+
+  // Delay compensation — state snapshot buffer
+  // Max delay to compensate for (seconds). GNSS is typically 100-300ms late.
+  double max_measurement_delay = 0.5;
+
+  // How many state snapshots to keep. At 100Hz IMU, 50 = 0.5 seconds.
+  int snapshot_buffer_size = 50;
 
   // Does the IMU have a magnetometer (9-axis)?
   // true  — IMU orientation includes magnetically-referenced yaw (BNO08x,
@@ -123,6 +132,17 @@ private:
   double last_gnss_time_    = -1.0;
   int    update_count_      = 0;
 
+  // State snapshot for delay compensation
+  struct StateSnapshot {
+    double timestamp;
+    State  state;
+    double last_imu_time;
+    double last_encoder_time;
+    double last_gnss_time;
+  };
+
+  std::deque<StateSnapshot> snapshot_buffer_;
+
   // Heading observability tracking
   bool          heading_validated_ = false;
   HeadingSource heading_source_    = HeadingSource::NONE;
@@ -134,6 +154,12 @@ private:
   double distance_traveled_ = 0.0;
 
   void predict_to(double timestamp_seconds);
+  void apply_gnss_update(double timestamp_seconds, const sensors::GnssFix& fix);
+  void save_snapshot();
+  bool apply_delayed_measurement(
+    double measurement_timestamp,
+    const std::function<void()>& apply_fn
+  );
   void update_distance_traveled(double x, double y);
 };
 
