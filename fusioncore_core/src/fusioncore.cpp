@@ -17,6 +17,14 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   last_gnss_time_    = -1.0;
   update_count_      = 0;
   initialized_       = true;
+
+  // Reset heading observability
+  heading_validated_ = false;
+  heading_source_    = HeadingSource::NONE;
+  gnss_pos_set_      = false;
+  distance_traveled_ = 0.0;
+  last_gnss_x_       = 0.0;
+  last_gnss_y_       = 0.0;
 }
 
 void FusionCore::reset() {
@@ -26,6 +34,10 @@ void FusionCore::reset() {
   last_encoder_time_ = -1.0;
   last_gnss_time_    = -1.0;
   update_count_      = 0;
+  heading_validated_ = false;
+  heading_source_    = HeadingSource::NONE;
+  gnss_pos_set_      = false;
+  distance_traveled_ = 0.0;
 }
 
 void FusionCore::predict_to(double timestamp_seconds) {
@@ -37,6 +49,29 @@ void FusionCore::predict_to(double timestamp_seconds) {
   }
   ukf_.predict(dt);
   last_timestamp_ = timestamp_seconds;
+}
+
+void FusionCore::update_distance_traveled(double x, double y) {
+  if (!gnss_pos_set_) {
+    last_gnss_x_  = x;
+    last_gnss_y_  = y;
+    gnss_pos_set_ = true;
+    return;
+  }
+  double dx = x - last_gnss_x_;
+  double dy = y - last_gnss_y_;
+  double dist = std::sqrt(dx*dx + dy*dy);
+  distance_traveled_ += dist;
+  last_gnss_x_ = x;
+  last_gnss_y_ = y;
+
+  // If robot has moved enough, heading is geometrically observable
+  // from the GPS track — but only if no better source already validated it
+  if (!heading_validated_ &&
+      distance_traveled_ >= config_.heading_observable_distance) {
+    heading_validated_ = true;
+    heading_source_    = HeadingSource::GPS_TRACK;
+  }
 }
 
 void FusionCore::update_imu(
@@ -87,6 +122,13 @@ void FusionCore::update_imu_orientation(
   ukf_.update<sensors::IMU_ORIENTATION_DIM>(
     z, sensors::imu_orientation_measurement_function, R);
 
+  // IMU orientation validates heading — this is a real independent source
+  if (!heading_validated_ ||
+      heading_source_ == HeadingSource::GPS_TRACK) {
+    heading_validated_ = true;
+    heading_source_    = HeadingSource::IMU_ORIENTATION;
+  }
+
   last_imu_time_ = timestamp_seconds;
   ++update_count_;
 }
@@ -117,10 +159,12 @@ bool FusionCore::update_gnss(
   if (!initialized_)
     throw std::runtime_error("FusionCore: update_gnss() called before init()");
 
-  // Reject poor quality fixes silently
   if (!fix.is_valid(config_.gnss)) return false;
 
   predict_to(timestamp_seconds);
+
+  // Track distance for GPS-track heading observability
+  update_distance_traveled(fix.x, fix.y);
 
   sensors::GnssPosMeasurement z;
   z[0] = fix.x;
@@ -130,31 +174,27 @@ bool FusionCore::update_gnss(
   sensors::GnssPosNoiseMatrix R =
     sensors::gnss_pos_noise_matrix(config_.gnss, fix);
 
-  // Use lever arm corrected measurement function if antenna is offset.
-  // peci1 fix: only apply lever arm correction when yaw is sufficiently
-  // converged. If yaw uncertainty is high, the lever arm rotation is
-  // unreliable and can destabilize the filter.
+  // Lever arm logic — only apply when heading is GENUINELY validated
+  // from an independent source. This is the proper fix for peci1's
+  // observability concern: we don't trust yaw_variance alone because
+  // the filter can artificially reduce variance without real heading info.
   //
-  // Yaw variance is P(YAW, YAW) — the diagonal element of the covariance.
-  // Threshold of 0.1 rad² (~18 degrees std dev) is conservative enough
-  // to avoid injecting bad corrections while still applying the correction
-  // once the filter has a reasonable heading estimate.
+  // heading_validated_ is only set true when:
+  //   - dual antenna heading message received (DUAL_ANTENNA)
+  //   - IMU orientation message received (IMU_ORIENTATION)
+  //   - robot moved >= heading_observable_distance meters (GPS_TRACK)
+  //
+  // Before any of these, lever arm is disabled regardless of yaw_variance.
 
-  const double yaw_variance = ukf_.state().P(YAW, YAW);
-  const double YAW_VARIANCE_THRESHOLD = 0.1;  // rad²
+  bool use_lever_arm = !config_.gnss.lever_arm.is_zero() && heading_validated_;
 
-  if (config_.gnss.lever_arm.is_zero() || yaw_variance > YAW_VARIANCE_THRESHOLD) {
-    // Either no lever arm configured, or yaw not yet converged — fuse at base_link
-    if (!config_.gnss.lever_arm.is_zero() && yaw_variance > YAW_VARIANCE_THRESHOLD) {
-      // Will be printed at most once per second via the caller
-    }
-    ukf_.update<sensors::GNSS_POS_DIM>(
-      z, sensors::gnss_pos_measurement_function, R);
-  } else {
-    // Yaw is converged — apply lever arm correction
+  if (use_lever_arm) {
     auto h = sensors::gnss_pos_measurement_function_with_lever_arm(
       config_.gnss.lever_arm);
     ukf_.update<sensors::GNSS_POS_DIM>(z, h, R);
+  } else {
+    ukf_.update<sensors::GNSS_POS_DIM>(
+      z, sensors::gnss_pos_measurement_function, R);
   }
 
   last_gnss_time_ = timestamp_seconds;
@@ -180,8 +220,12 @@ bool FusionCore::update_gnss_heading(
     sensors::gnss_hdg_noise_matrix(config_.gnss, heading);
 
   ukf_.update<sensors::GNSS_HDG_DIM>(
-    z, sensors::gnss_hdg_measurement_function, R
-  );
+    z, sensors::gnss_hdg_measurement_function, R);
+
+  // Dual antenna heading is the strongest possible heading validation
+  // Override any weaker source
+  heading_validated_ = true;
+  heading_source_    = HeadingSource::DUAL_ANTENNA;
 
   last_gnss_time_ = timestamp_seconds;
   ++update_count_;
@@ -218,6 +262,11 @@ FusionCoreStatus FusionCore::get_status() const {
 
   const StateMatrix& P = ukf_.state().P;
   status.position_uncertainty = P(0,0) + P(1,1) + P(2,2);
+
+  // Heading observability
+  status.heading_validated = heading_validated_;
+  status.heading_source    = heading_source_;
+  status.distance_traveled = distance_traveled_;
 
   return status;
 }

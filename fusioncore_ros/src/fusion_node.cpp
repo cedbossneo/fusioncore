@@ -432,15 +432,14 @@ private:
         "GNSS fix rejected (poor quality)");
     }
 
-    // Inform user if lever arm correction is being skipped due to yaw uncertainty
-    const auto& state = fc_->get_state();
-    double yaw_std_deg = std::sqrt(state.P(fusioncore::YAW, fusioncore::YAW))
-                         * 180.0 / M_PI;
-    if (yaw_std_deg > 18.0) {
+    // Log heading observability status
+    auto fc_status = fc_->get_status();
+    if (!fc_status.heading_validated) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-        "GNSS lever arm correction inactive — yaw uncertainty %.1f deg "
-        "(waiting for < 18 deg)",
-        yaw_std_deg);
+        "Heading not yet validated — lever arm inactive. "
+        "Distance traveled: %.1fm (need %.1fm), or provide dual antenna / IMU orientation.",
+        fc_status.distance_traveled,
+        5.0);
     }
   }
 
