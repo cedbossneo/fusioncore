@@ -102,7 +102,7 @@ void UKF::predict(double dt) {
 }
 
 template <int z_dim>
-void UKF::update(
+Eigen::Matrix<double, z_dim, 1> UKF::update(
   const Eigen::Matrix<double, z_dim, 1>& z,
   const std::function<Eigen::Matrix<double, z_dim, 1>(const StateVector&)>& h,
   const Eigen::Matrix<double, z_dim, z_dim>& R
@@ -134,9 +134,11 @@ void UKF::update(
     Pxz += Wc_[i] * x_diff * z_diff.transpose();
   }
 
+  ZVector innovation = z - z_pred;
   PxzMatrix K = Pxz * S.inverse();
-  state_.x = normalize_state(state_.x + K * (z - z_pred));
+  state_.x = normalize_state(state_.x + K * innovation);
   state_.P -= K * S * K.transpose();
+  return innovation;
 }
 
 double UKF::normalize_angle(double angle) {
@@ -154,22 +156,22 @@ StateVector UKF::normalize_state(const StateVector& x) {
 }
 
 // Explicit template instantiations
-template void UKF::update<1>(
+template Eigen::Matrix<double, 1, 1> UKF::update<1>(
   const Eigen::Matrix<double, 1, 1>&,
   const std::function<Eigen::Matrix<double, 1, 1>(const StateVector&)>&,
   const Eigen::Matrix<double, 1, 1>&
 );
-template void UKF::update<3>(
+template Eigen::Matrix<double, 3, 1> UKF::update<3>(
   const Eigen::Matrix<double, 3, 1>&,
   const std::function<Eigen::Matrix<double, 3, 1>(const StateVector&)>&,
   const Eigen::Matrix<double, 3, 3>&
 );
-template void UKF::update<6>(
+template Eigen::Matrix<double, 6, 1> UKF::update<6>(
   const Eigen::Matrix<double, 6, 1>&,
   const std::function<Eigen::Matrix<double, 6, 1>(const StateVector&)>&,
   const Eigen::Matrix<double, 6, 6>&
 );
-template void UKF::update<7>(
+template Eigen::Matrix<double, 7, 1> UKF::update<7>(
   const Eigen::Matrix<double, 7, 1>&,
   const std::function<Eigen::Matrix<double, 7, 1>(const StateVector&)>&,
   const Eigen::Matrix<double, 7, 7>&

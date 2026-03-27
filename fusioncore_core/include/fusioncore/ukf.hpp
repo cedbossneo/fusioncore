@@ -51,8 +51,9 @@ public:
   // z: measurement vector
   // h: measurement function (state -> measurement space)
   // R: measurement noise covariance
+  // Returns innovation vector (z - z_pred) for adaptive noise tracking
   template <int z_dim>
-  void update(
+  Eigen::Matrix<double, z_dim, 1> update(
     const Eigen::Matrix<double, z_dim, 1>& z,
     const std::function<Eigen::Matrix<double, z_dim, 1>(const StateVector&)>& h,
     const Eigen::Matrix<double, z_dim, z_dim>& R

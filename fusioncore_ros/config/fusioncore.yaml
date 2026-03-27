@@ -33,6 +33,15 @@ fusioncore:
     # Leave empty to use sensor_msgs/Imu heading instead
     gnss.azimuth_topic: ""
 
+    # Adaptive noise covariance
+    # Automatically estimates true sensor noise from innovation sequence
+    # Set to false to use fixed config params only
+    adaptive.imu: true
+    adaptive.encoder: true
+    adaptive.gnss: true
+    adaptive.window: 50       # number of updates to track (50 = ~0.5s at 100Hz)
+    adaptive.alpha: 0.01      # learning rate (0.01 = slow, stable)
+
     ukf.q_position: 0.01
     ukf.q_orientation: 0.01
     ukf.q_velocity: 0.1

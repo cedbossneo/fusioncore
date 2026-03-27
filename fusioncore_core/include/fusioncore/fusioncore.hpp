@@ -9,6 +9,7 @@
 #include <string>
 #include <deque>
 #include <functional>
+#include <array>
 
 namespace fusioncore {
 
@@ -25,6 +26,18 @@ struct FusionCoreConfig {
   double heading_observable_distance = 5.0;
 
   // Delay compensation — state snapshot buffer
+  // Adaptive noise covariance
+  // Whether to enable adaptive R estimation for each sensor
+  bool adaptive_imu     = true;
+  bool adaptive_encoder = true;
+  bool adaptive_gnss    = true;
+
+  // Sliding window size for innovation tracking (number of updates)
+  int adaptive_window = 50;
+
+  // Learning rate — how fast R adapts to estimated noise (0.0 = off, 0.1 = fast)
+  double adaptive_alpha = 0.01;
+
   // Max delay to compensate for (seconds). GNSS is typically 100-300ms late.
   double max_measurement_delay = 0.5;
 
@@ -132,7 +145,59 @@ private:
   double last_gnss_time_    = -1.0;
   int    update_count_      = 0;
 
-  // State snapshot for delay compensation
+  // ─── Adaptive noise covariance ───────────────────────────────────────────
+  // Tracks a sliding window of innovations per sensor.
+  // Estimates actual noise from innovation sequence.
+  // Slowly adjusts R toward estimated value.
+
+  // Generic innovation window — stores squared innovations per dimension
+  template <int z_dim>
+  struct InnovationWindow {
+    using ZMatrix = Eigen::Matrix<double, z_dim, z_dim>;
+    std::deque<Eigen::Matrix<double, z_dim, 1>> innovations;
+    int max_size = 50;
+
+    void push(const Eigen::Matrix<double, z_dim, 1>& nu) {
+      innovations.push_back(nu);
+      if ((int)innovations.size() > max_size)
+        innovations.pop_front();
+    }
+
+    bool ready() const { return (int)innovations.size() >= max_size / 2; }
+
+    // Estimate covariance from innovation window
+    ZMatrix estimate_covariance() const {
+      ZMatrix C = ZMatrix::Zero();
+      for (const auto& nu : innovations)
+        C += nu * nu.transpose();
+      return C / (double)innovations.size();
+    }
+  };
+
+  InnovationWindow<sensors::IMU_DIM>              imu_innovations_;
+  InnovationWindow<sensors::ENCODER_DIM>          encoder_innovations_;
+  InnovationWindow<sensors::GNSS_POS_DIM>         gnss_innovations_;
+  InnovationWindow<sensors::IMU_ORIENTATION_DIM>  imu_orient_innovations_;
+
+  // Current adaptive R estimates — start at config values, drift toward truth
+  sensors::ImuNoiseMatrix             R_imu_;
+  sensors::EncoderNoiseMatrix         R_encoder_;
+  sensors::GnssPosNoiseMatrix         R_gnss_;
+  sensors::ImuOrientationNoiseMatrix  R_imu_orient_;
+
+  bool adaptive_initialized_ = false;
+
+  void init_adaptive_R();
+
+  template <int z_dim>
+  void adapt_R(
+    Eigen::Matrix<double, z_dim, z_dim>& R,
+    InnovationWindow<z_dim>& window,
+    const Eigen::Matrix<double, z_dim, 1>& innovation,
+    bool enabled
+  );
+
+  // ─── State snapshot for delay compensation
   struct StateSnapshot {
     double timestamp;
     State  state;

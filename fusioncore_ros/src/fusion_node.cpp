@@ -70,6 +70,12 @@ public:
     declare_parameter("gnss.lever_arm_y", 0.0);
     declare_parameter("gnss.lever_arm_z", 0.0);
 
+    declare_parameter("adaptive.imu",     true);
+    declare_parameter("adaptive.encoder", true);
+    declare_parameter("adaptive.gnss",    true);
+    declare_parameter("adaptive.window",  50);
+    declare_parameter("adaptive.alpha",   0.01);
+
     declare_parameter("ukf.q_position",     0.01);
     declare_parameter("ukf.q_orientation",  0.01);
     declare_parameter("ukf.q_velocity",     0.1);
@@ -116,7 +122,13 @@ public:
         config.gnss.lever_arm.z);
     }
 
-    config.ukf.q_position     = get_parameter("ukf.q_position").as_double();
+    config.adaptive_imu     = get_parameter("adaptive.imu").as_bool();
+    config.adaptive_encoder = get_parameter("adaptive.encoder").as_bool();
+    config.adaptive_gnss    = get_parameter("adaptive.gnss").as_bool();
+    config.adaptive_window  = get_parameter("adaptive.window").as_int();
+    config.adaptive_alpha   = get_parameter("adaptive.alpha").as_double();
+
+    config.ukf.q_position   = get_parameter("ukf.q_position").as_double();
     config.ukf.q_orientation  = get_parameter("ukf.q_orientation").as_double();
     config.ukf.q_velocity     = get_parameter("ukf.q_velocity").as_double();
     config.ukf.q_angular_vel  = get_parameter("ukf.q_angular_vel").as_double();

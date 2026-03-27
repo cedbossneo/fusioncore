@@ -5,6 +5,46 @@
 
 namespace fusioncore {
 
+// ─── Adaptive noise covariance implementation ─────────────────────────────
+
+void FusionCore::init_adaptive_R() {
+  R_imu_         = sensors::imu_noise_matrix(config_.imu);
+  R_encoder_     = sensors::encoder_noise_matrix(config_.encoder);
+  R_gnss_        = sensors::GnssPosNoiseMatrix::Identity();  // will be set per-fix
+  R_imu_orient_  = sensors::imu_orientation_noise_matrix(sensors::ImuOrientationParams{});
+
+  imu_innovations_.max_size         = config_.adaptive_window;
+  encoder_innovations_.max_size     = config_.adaptive_window;
+  gnss_innovations_.max_size        = config_.adaptive_window;
+  imu_orient_innovations_.max_size  = config_.adaptive_window;
+
+  adaptive_initialized_ = true;
+}
+
+template <int z_dim>
+void FusionCore::adapt_R(
+  Eigen::Matrix<double, z_dim, z_dim>& R,
+  InnovationWindow<z_dim>& window,
+  const Eigen::Matrix<double, z_dim, 1>& innovation,
+  bool enabled)
+{
+  window.push(innovation);
+
+  if (!enabled || !window.ready()) return;
+
+  // Estimate actual noise covariance from innovation window
+  auto C_hat = window.estimate_covariance();
+
+  // Slow exponential moving average toward estimated value
+  // R_(k+1) = (1 - alpha) * R_k + alpha * C_hat
+  R = (1.0 - config_.adaptive_alpha) * R + config_.adaptive_alpha * C_hat;
+
+  // Guard: diagonal must stay positive — clip to small minimum
+  for (int i = 0; i < z_dim; ++i) {
+    if (R(i,i) < 1e-9) R(i,i) = 1e-9;
+  }
+}
+
 FusionCore::FusionCore(const FusionCoreConfig& config)
   : config_(config), ukf_(config.ukf)
 {}
@@ -28,6 +68,9 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
 
   // Reset snapshot buffer
   snapshot_buffer_.clear();
+
+  // Initialize adaptive noise matrices
+  init_adaptive_R();
 }
 
 void FusionCore::reset() {
@@ -199,8 +242,12 @@ void FusionCore::update_imu(
   z[0] = wx; z[1] = wy; z[2] = wz;
   z[3] = ax; z[4] = ay; z[5] = az;
 
-  sensors::ImuNoiseMatrix R = sensors::imu_noise_matrix(config_.imu);
-  ukf_.update<sensors::IMU_DIM>(z, sensors::imu_measurement_function, R);
+  // Use adaptive R if initialized, else config default
+  sensors::ImuNoiseMatrix R = adaptive_initialized_ ? R_imu_ : sensors::imu_noise_matrix(config_.imu);
+  auto innovation = ukf_.update<sensors::IMU_DIM>(z, sensors::imu_measurement_function, R);
+
+  // Track innovation for adaptive noise estimation
+  adapt_R<sensors::IMU_DIM>(R_imu_, imu_innovations_, innovation, config_.adaptive_imu);
 
   // Save snapshot for delay compensation
   save_snapshot();
@@ -269,14 +316,19 @@ void FusionCore::update_encoder(
   sensors::EncoderMeasurement z;
   z[0] = vx; z[1] = vy; z[2] = wz;
 
-  // Use message covariance when provided (peci1 fix)
-  // Falls back to config params when var is -1.0 (not available)
-  sensors::EncoderNoiseMatrix R = sensors::encoder_noise_matrix(config_.encoder);
+  // Use message covariance when provided, else adaptive R, else config default
+  sensors::EncoderNoiseMatrix R = adaptive_initialized_ ? R_encoder_ : sensors::encoder_noise_matrix(config_.encoder);
   if (var_vx > 0.0) R(0,0) = var_vx;
   if (var_vy > 0.0) R(1,1) = var_vy;
   if (var_wz > 0.0) R(2,2) = var_wz;
 
-  ukf_.update<sensors::ENCODER_DIM>(z, sensors::encoder_measurement_function, R);
+  auto innovation = ukf_.update<sensors::ENCODER_DIM>(z, sensors::encoder_measurement_function, R);
+
+  // Track innovation for adaptive noise estimation
+  // Only adapt axes where message covariance was not provided
+  if (var_vx <= 0.0 && var_vy <= 0.0 && var_wz <= 0.0) {
+    adapt_R<sensors::ENCODER_DIM>(R_encoder_, encoder_innovations_, innovation, config_.adaptive_encoder);
+  }
 
   last_encoder_time_ = timestamp_seconds;
   ++update_count_;
@@ -327,19 +379,33 @@ void FusionCore::apply_gnss_update(
   z[1] = fix.y;
   z[2] = fix.z;
 
-  sensors::GnssPosNoiseMatrix R =
-    sensors::gnss_pos_noise_matrix(config_.gnss, fix);
+  // Start with message covariance or HDOP-based estimate
+  sensors::GnssPosNoiseMatrix R = sensors::gnss_pos_noise_matrix(config_.gnss, fix);
+
+  // Blend with adaptive R if the fix does NOT have full message covariance
+  // (if it does have full covariance, trust the receiver — don't override)
+  if (adaptive_initialized_ && config_.adaptive_gnss && !fix.has_full_covariance) {
+    R = (1.0 - config_.adaptive_alpha) * R + config_.adaptive_alpha * R_gnss_;
+    // Guard diagonal
+    for (int i = 0; i < 3; ++i)
+      if (R(i,i) < 1e-6) R(i,i) = 1e-6;
+  }
 
   bool use_lever_arm = !config_.gnss.lever_arm.is_zero() && heading_validated_;
+
+  Eigen::Matrix<double, sensors::GNSS_POS_DIM, 1> innovation;
 
   if (use_lever_arm) {
     auto h = sensors::gnss_pos_measurement_function_with_lever_arm(
       config_.gnss.lever_arm);
-    ukf_.update<sensors::GNSS_POS_DIM>(z, h, R);
+    innovation = ukf_.update<sensors::GNSS_POS_DIM>(z, h, R);
   } else {
-    ukf_.update<sensors::GNSS_POS_DIM>(
+    innovation = ukf_.update<sensors::GNSS_POS_DIM>(
       z, sensors::gnss_pos_measurement_function, R);
   }
+
+  // Track innovation for adaptive GNSS noise estimation
+  adapt_R<sensors::GNSS_POS_DIM>(R_gnss_, gnss_innovations_, innovation, config_.adaptive_gnss);
 }
 
 bool FusionCore::update_gnss_heading(
