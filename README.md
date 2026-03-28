@@ -243,7 +243,7 @@ This is approximate retrodiction: the re-prediction uses the motion model rather
 
 FusionCore ships with a Gazebo Harmonic simulation world so you can test the full fusion pipeline without physical hardware. It includes a differential drive robot with a 100Hz IMU and GPS, in an outdoor environment with the GPS origin set to Hamilton, Ontario.
 
-One thing worth knowing up front: Gazebo Harmonic's built-in NavSat sensor has a known bug (gz-sim issue #2163) where it periodically outputs GPS fixes at completely wrong coordinates — sometimes 100km away. Rather than fight a broken sensor, the simulation derives GPS from Gazebo's ground truth world pose and adds realistic Gaussian noise (1m horizontal, 2m vertical). This gives you a clean, honest GPS model for testing the filter.
+One thing worth knowing up front: Gazebo Harmonic's built-in NavSat sensor has a known bug (gz-sim issue #2163) where it periodically outputs GPS fixes at completely wrong coordinates: sometimes 100km away. Rather than fight a broken sensor, the simulation derives GPS from Gazebo's ground truth world pose and adds realistic Gaussian noise (1m horizontal, 2m vertical). This gives you a clean, honest GPS model for testing the filter.
 
 ### Running the simulation
 
@@ -257,23 +257,23 @@ colcon build --packages-select fusioncore_core fusioncore_ros fusioncore_gazebo
 source install/setup.bash
 ```
 
-Launch everything — Gazebo, the ROS bridge, and FusionCore all start together and auto-configure after 12 seconds:
+Launch everything: Gazebo, the ROS bridge, and FusionCore all start together and auto-configure after 12 seconds:
 ```bash
 ros2 launch fusioncore_gazebo fusioncore_gazebo.launch.py
 ```
 
 Drive the robot and watch the fused position:
 ```bash
-# Terminal 2 — drive forward
+# Terminal 2: drive forward
 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5}, angular: {z: 0.0}}" --rate 10
 
-# Terminal 3 — watch position
+# Terminal 3: watch position
 ros2 topic echo /fusion/odom --field pose.pose.position
 ```
 
 ### Integration tests
 
-Four automated tests verify the full stack — IMU drift rate, outlier rejection, GPS correction after drift, and full circle return. Run them while the simulation is up:
+Four automated tests verify the full stack: IMU drift rate, outlier rejection, GPS correction after drift, and full circle return. Run them while the simulation is up:
 ```bash
 python3 ~/ros2_ws/src/fusioncore/fusioncore_gazebo/launch/integration_test.py
 ```
@@ -349,7 +349,7 @@ fusioncore/
 - Adaptive noise covariance: automatic R estimation from innovation sequence
 - GPS delay compensation: retrodiction up to 500ms
 - ROS 2 Jazzy lifecycle node at 100Hz
-- Gazebo Harmonic simulation world with full integration tests
+- Gazebo Harmonic simulation world
 
 **Known limitations:**
 - Delay compensation uses approximate retrodiction (one forward prediction step, not full IMU replay). Accurate for smooth motion, may introduce small inconsistencies during high-acceleration maneuvers.
@@ -358,7 +358,6 @@ fusioncore/
 **Roadmap:**
 - Full IMU replay retrodiction
 - Ackermann and omnidirectional steering motion models
-- Phase 2: hardware module: custom PCB, ICM-42688-P + MMC5983MA, 400Hz onboard fusion, $150-200 per unit
 
 ---
 
