@@ -89,6 +89,8 @@ ros2 topic hz /fusion/odom
 
 FusionCore uses a ROS 2 lifecycle node. Configure first (load parameters, validate TF tree, check transforms), then activate (start processing sensor data). This prevents the filter from starting with bad initial values or missing transforms.
 
+> **WSL2 note:** If `ros2 lifecycle set` returns "Node not found", use the launch file's built-in auto-configure instead. The Gazebo launch file (`fusioncore_gazebo.launch.py`) configures and activates the node automatically via `EmitEvent(ChangeState(...))` 12 seconds after startup, bypassing DDS discovery latency that affects WSL2.
+
 ---
 
 ## Sensor topics
@@ -130,8 +132,11 @@ fusioncore:
     encoder.vel_noise: 0.05     # m/s
     encoder.yaw_noise: 0.02     # rad/s
 
-    gnss.base_noise_xy: 1.0     # meters: scaled automatically by HDOP
-    gnss.base_noise_z: 2.0      # meters
+    gnss.base_noise_xy: 1.0     # meters: scaled automatically by HDOP. Must be 1.0 when
+                                # NavSatFix provides covariance — fusion_node sets
+                                # fix.hdop = sqrt(var_xy), so sigma = 1.0 * sqrt(var_xy).
+                                # Setting this to NOISE_H double-shrinks R.
+    gnss.base_noise_z: 1.0      # meters: same reasoning — set to 1.0, not NOISE_V
     gnss.heading_noise: 0.02    # rad: for dual antenna
     gnss.max_hdop: 4.0          # reject fixes worse than this
     gnss.min_satellites: 4
@@ -270,7 +275,7 @@ This is approximate retrodiction: the re-prediction uses the motion model rather
 
 FusionCore ships with a Gazebo Harmonic simulation world so you can test the full fusion pipeline without physical hardware. It includes a differential drive robot with a 100Hz IMU and GPS, in an outdoor environment with the GPS origin set to Hamilton, Ontario.
 
-One thing worth knowing up front: Gazebo Harmonic's built-in NavSat sensor has a known bug (gz-sim issue #2163) where it periodically outputs GPS fixes at completely wrong coordinates: sometimes 100km away. Rather than fight a broken sensor, the simulation derives GPS from Gazebo's ground truth world pose and adds realistic Gaussian noise (1m horizontal, 2m vertical). This gives you a clean, honest GPS model for testing the filter.
+One thing worth knowing up front: Gazebo Harmonic's built-in NavSat sensor has a known bug (gz-sim issue #2163) where it periodically outputs GPS fixes at completely wrong coordinates: sometimes 100km away. Rather than fight a broken sensor, the simulation derives GPS from Gazebo's ground truth world pose and adds realistic Gaussian noise (0.5m horizontal, 0.3m vertical 1-sigma). This gives you a clean, honest GPS model for testing the filter.
 
 ### Running the simulation
 
@@ -364,6 +369,7 @@ fusioncore/
 
 **Working and tested:**
 - UKF core: 42 unit tests passing via colcon test
+- UKF numerical stability: P symmetrization + identity-shift Cholesky repair
 - IMU + encoder + GPS fusion
 - Automatic IMU bias estimation
 - ECEF GPS conversion with quality-aware noise scaling
@@ -385,6 +391,7 @@ fusioncore/
 
 **Known limitations:**
 - GNSS antenna lever arm is fixed and known: does not estimate it from data.
+- In Gazebo simulation, residual y-axis drift (~0.3m) can occur from real Gazebo physics (wheel contact forces, slight crabbing). This is not a filter error — the robot's true center of mass drifts relative to the GPS-derived ENU origin.
 
 **Roadmap:**
 - Ackermann and omnidirectional steering motion models

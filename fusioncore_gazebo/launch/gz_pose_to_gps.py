@@ -11,8 +11,8 @@ ORIGIN_LON = -79.8711
 ORIGIN_ALT = 100.0
 A  = 6378137.0
 E2 = 0.00669437999014
-NOISE_H = 0.5   # 1-sigma horizontal GPS noise (m) — 1.0 was too large, biased y
-NOISE_V = 0.3   # 1-sigma vertical GPS noise (m)   — 2.0 caused persistent z bias via noisy reference capture
+NOISE_H = 0.5   # 1-sigma horizontal GPS noise (m)
+NOISE_V = 0.3   # 1-sigma vertical GPS noise (m)
 
 def enu_to_lla(x, y, z):
     lat0 = math.radians(ORIGIN_LAT)
@@ -37,42 +37,87 @@ def enu_to_lla(x, y, z):
     alt = p/math.cos(lat)-N
     return math.degrees(lat), math.degrees(math.atan2(Yp,Xp)), alt
 
+def _is_base_link(frame_id):
+    # Matches "base_link", "fusioncore_robot::base_link", "fusioncore_robot/base_link"
+    tail = frame_id.rsplit("::", 1)[-1].rsplit("/", 1)[-1]
+    return tail == "base_link"
+
 class GzPoseToGps(Node):
     def __init__(self):
         super().__init__("gz_pose_to_gps")
         self.pub = self.create_publisher(NavSatFix, "/gnss/fix", 10)
         self.sub = self.create_subscription(
             TFMessage, "/world/fusioncore_test/pose/info", self.pose_cb, 10)
-        # Track the largest-magnitude x,y position seen — that is the robot body
-        # in world frame. Local link offsets (wheels, imu) are always small (<0.5m).
-        # The robot body accumulates position as it drives.
-        self.last_body_x = None
-        self.last_body_y = None
+        # child_frame_id of the link we've locked onto as the robot body.
+        # Set on the first callback; used exclusively afterwards so that
+        # the reference altitude and all subsequent ENU positions use
+        # exactly the same link — preventing wheel-vs-body switch bias.
+        self.body_frame_id = None
+        # True after the very first NavSatFix is published.
+        # The first publish uses z = best.z (no vertical noise) so that
+        # fusion_node captures an accurate altitude reference.  All
+        # subsequent publishes add NOISE_V to model realistic GPS error.
+        self.ref_published = False
         self.get_logger().info(f"GPS publisher ready. Origin: {ORIGIN_LAT}, {ORIGIN_LON}")
 
-    def pose_cb(self, msg):
-        # The robot body transform is the one with the largest x^2+y^2 magnitude
-        # among all transforms with z between 0.05 and 0.4m.
-        # Local link offsets (wheels=0.22m, imu=0.1m) are always < 0.5m from origin.
-        # The robot body position grows as the robot drives.
+    def _find_body(self, msg):
+        """Return the translation of the robot body link.
+
+        Priority:
+          1. Previously locked-on frame (sticky — avoids inter-callback switching).
+          2. Any frame whose tail name is "base_link" (robust across SDF / ROS naming).
+          3. Max x²+y² magnitude fallback (original heuristic, kept for other models).
+        """
+        # 1. Sticky: reuse the frame identified on a previous callback
+        if self.body_frame_id is not None:
+            for tf in msg.transforms:
+                if tf.child_frame_id == self.body_frame_id:
+                    t = tf.transform.translation
+                    if 0.05 < t.z < 0.4:
+                        return t
+            # If the sticky frame is no longer present / out of z range, fall through
+
+        # 2. Name-based: find "base_link" regardless of namespace prefix
+        for tf in msg.transforms:
+            if _is_base_link(tf.child_frame_id):
+                t = tf.transform.translation
+                if 0.05 < t.z < 0.4:
+                    self.body_frame_id = tf.child_frame_id
+                    return t
+
+        # 3. Fallback: original max-magnitude heuristic
         best = None
         best_mag = -1.0
+        best_fid = None
         for tf in msg.transforms:
             t = tf.transform.translation
-            # Must be at ground height
             if not (0.05 < t.z < 0.4):
                 continue
             mag = t.x*t.x + t.y*t.y
             if mag > best_mag:
                 best_mag = mag
                 best = t
+                best_fid = tf.child_frame_id
+        if best_fid is not None:
+            self.body_frame_id = best_fid
+        return best
 
+    def pose_cb(self, msg):
+        best = self._find_body(msg)
         if best is None:
             return
 
         x = best.x + random.gauss(0, NOISE_H)
         y = best.y + random.gauss(0, NOISE_H)
-        z = best.z + random.gauss(0, NOISE_V)
+        # First publish: use exact z so fusion_node's altitude reference has no bias.
+        # Without this, a random noise_first spike permanently offsets every ENU z
+        # reading for the entire run (ENU z = noise_i - noise_first).
+        if not self.ref_published:
+            z = best.z
+            self.ref_published = True
+        else:
+            z = best.z + random.gauss(0, NOISE_V)
+
         lat, lon, alt = enu_to_lla(x, y, z)
 
         fix = NavSatFix()
