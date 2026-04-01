@@ -133,10 +133,10 @@ fusioncore:
     encoder.yaw_noise: 0.02     # rad/s
 
     gnss.base_noise_xy: 1.0     # meters: scaled automatically by HDOP. Must be 1.0 when
-                                # NavSatFix provides covariance — fusion_node sets
+                                # NavSatFix provides covariance: fusion_node sets
                                 # fix.hdop = sqrt(var_xy), so sigma = 1.0 * sqrt(var_xy).
                                 # Setting this to NOISE_H double-shrinks R.
-    gnss.base_noise_z: 1.0      # meters: same reasoning — set to 1.0, not NOISE_V
+    gnss.base_noise_z: 1.0      # meters: same reasoning: set to 1.0, not NOISE_V
     gnss.heading_noise: 0.02    # rad: for dual antenna
     gnss.max_hdop: 4.0          # reject fixes worse than this
     gnss.min_satellites: 4
@@ -391,7 +391,7 @@ fusioncore/
 
 **Known limitations:**
 - GNSS antenna lever arm is fixed and known: does not estimate it from data.
-- In Gazebo simulation, residual y-axis drift (~0.3m) can occur from real Gazebo physics (wheel contact forces, slight crabbing). This is not a filter error — the robot's true center of mass drifts relative to the GPS-derived ENU origin.
+- In Gazebo simulation, residual y-axis drift (~0.3m) can occur from real Gazebo physics (wheel contact forces, slight crabbing). This is not a filter error: the robot's true center of mass drifts relative to the GPS-derived ENU origin.
 
 **Roadmap:**
 - Ackermann and omnidirectional steering motion models
