@@ -1,0 +1,48 @@
+fusioncore:
+  ros__parameters:
+    base_frame: duarover_base
+    odom_frame: odom
+    publish_rate: 50.0
+
+    # BNO085 without magnetometer — yaw from gyro integration (will drift)
+    imu.has_magnetometer: false
+    imu.gyro_noise: 0.005
+    imu.accel_noise: 0.1
+
+    encoder.vel_noise: 0.05
+    encoder.yaw_noise: 0.02
+
+    # GPS disabled — IMU + odometry only
+    gnss.base_noise_xy: 1.0
+    gnss.base_noise_z: 2.0
+    gnss.heading_noise: 0.02
+    gnss.max_hdop: 4.0
+    gnss.min_satellites: 4
+    gnss.fix2_topic: ""
+    gnss.azimuth_topic: ""
+
+    gnss.lever_arm_x: 0.0
+    gnss.lever_arm_y: 0.0
+    gnss.lever_arm_z: 0.0
+
+    # Mahalanobis outlier rejection
+    outlier_rejection: true
+    outlier_threshold_gnss: 16.27
+    outlier_threshold_imu: 15.09
+    outlier_threshold_enc: 11.34
+    outlier_threshold_hdg: 10.83
+
+    # Adaptive noise covariance
+    adaptive.imu: true
+    adaptive.encoder: true
+    adaptive.gnss: false      # no GPS
+    adaptive.window: 50
+    adaptive.alpha: 0.01
+
+    ukf.q_position: 0.01
+    ukf.q_orientation: 0.01
+    ukf.q_velocity: 0.1
+    ukf.q_angular_vel: 0.1
+    ukf.q_acceleration: 1.0
+    ukf.q_gyro_bias: 1.0e-5
+    ukf.q_accel_bias: 1.0e-5
