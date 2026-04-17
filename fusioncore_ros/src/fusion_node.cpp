@@ -50,6 +50,12 @@ public:
     declare_parameter("base_frame",   "base_link");
     declare_parameter("odom_frame",   "odom");
     declare_parameter("publish_rate", 100.0);
+    // Force 2D output: zero the Z position in the published odometry
+    // and the odom->base TF. For ground robots where altitude is
+    // irrelevant (mower, vacuum, AGV), this prevents any GPS-altitude
+    // or IMU-Z drift from moving the costmap rolling window out of the
+    // 2D navigation plane. Orientation (roll/pitch) is untouched.
+    declare_parameter("publish.force_2d", false);
 
     declare_parameter("imu.gyro_noise",  0.005);
     // Set to true if IMU has a magnetometer (9-axis: BNO08x, VectorNav, Xsens)
@@ -152,6 +158,7 @@ public:
     base_frame_   = get_parameter("base_frame").as_string();
     odom_frame_   = get_parameter("odom_frame").as_string();
     publish_rate_ = get_parameter("publish_rate").as_double();
+    force_2d_     = get_parameter("publish.force_2d").as_bool();
     heading_topic_ = get_parameter("gnss.heading_topic").as_string();
     gnss2_topic_    = get_parameter("gnss.fix2_topic").as_string();
     azimuth_topic_  = get_parameter("gnss.azimuth_topic").as_string();
@@ -987,7 +994,7 @@ private:
 
     odom.pose.pose.position.x = s.x[fusioncore::X];
     odom.pose.pose.position.y = s.x[fusioncore::Y];
-    odom.pose.pose.position.z = s.x[fusioncore::Z];
+    odom.pose.pose.position.z = force_2d_ ? 0.0 : s.x[fusioncore::Z];
 
     tf2::Quaternion q;
     q.setRPY(s.x[fusioncore::ROLL],
@@ -1044,7 +1051,7 @@ private:
 
     tf.transform.translation.x = s.x[fusioncore::X];
     tf.transform.translation.y = s.x[fusioncore::Y];
-    tf.transform.translation.z = s.x[fusioncore::Z];
+    tf.transform.translation.z = force_2d_ ? 0.0 : s.x[fusioncore::Z];
     tf.transform.rotation.x = q.x();
     tf.transform.rotation.y = q.y();
     tf.transform.rotation.z = q.z();
@@ -1203,8 +1210,22 @@ private:
   }
 
   // gnss_to_output: LLA (radians) → output CRS (x, y, z).
-  // Bug 1 fix: proj_normalize_for_visualization makes EPSG:4326 expect degrees,
-  // so we convert from the internal radians to degrees before passing to PROJ.
+  //
+  // proj_normalize_for_visualization forces the map-plotting axis order for
+  // EPSG:4326: the first axis is LONGITUDE, the second is LATITUDE (because
+  // map renderers expect x=east, y=north). Values must be in degrees.
+  //
+  // Previous code passed (lat, lon) in slots 0/1, which caused PROJ to
+  // interpret the latitude value as longitude (and vice versa) — giving an
+  // ECEF roughly 6500 km off for mid-latitude sites. With
+  // reference.use_first_fix=true both sides of the round-trip were wrong in
+  // the same way so the bug was masked; with an external fixed ECEF
+  // reference (reference.use_first_fix=false), every live fix was rejected
+  // as thousands of km from the reference.
+  //
+  // Note: output_to_gnss uses `r.lpzt.phi` / `r.lpzt.lam` which are semantic
+  // (phi=latitude, lam=longitude) regardless of axis order, so no change is
+  // needed there.
   void gnss_to_output(
     const fusioncore::sensors::LLAPoint& lla,
     fusioncore::sensors::ECEFPoint& out)
@@ -1215,8 +1236,8 @@ private:
     }
     std::lock_guard<std::mutex> lock(proj_mutex_);
     PJ_COORD c = {{
-      lla.lat_rad * 180.0 / M_PI,   // degrees (after normalize_for_visualization)
-      lla.lon_rad * 180.0 / M_PI,
+      lla.lon_rad * 180.0 / M_PI,   // slot 0 = longitude (visualization order)
+      lla.lat_rad * 180.0 / M_PI,   // slot 1 = latitude
       lla.alt_m,
       HUGE_VAL
     }};
@@ -1268,6 +1289,7 @@ private:
   std::string base_frame_;
   std::string odom_frame_;
   double      publish_rate_;
+  bool        force_2d_ = false;
   std::string heading_topic_;
   std::string gnss2_topic_;
   std::string azimuth_topic_;
