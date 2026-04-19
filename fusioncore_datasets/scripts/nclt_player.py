@@ -196,7 +196,7 @@ class NCLTPlayer(Node):
                     lon_r = float(row[4])
                     alt_s = row[5].strip()
 
-                    if mode < 2:
+                    if mode < 3:   # require 3D fix: 2D fixes have nan altitude (set to 0), causing 273m z-spikes
                         skipped += 1
                         continue
 
