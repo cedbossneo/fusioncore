@@ -32,8 +32,22 @@ def main():
     args = parser.parse_args()
 
     reader = SequentialReader()
+    import glob as _glob, os as _os
+    # If directory, find the actual bag file (handles missing metadata.yaml)
+    uri = args.bag
+    if _os.path.isdir(args.bag):
+        mcap_files = _glob.glob(f'{args.bag}/*.mcap')
+        db3_files  = _glob.glob(f'{args.bag}/*.db3')
+        if mcap_files:
+            uri, storage_id = mcap_files[0], 'mcap'
+        elif db3_files:
+            uri, storage_id = db3_files[0], 'sqlite3'
+        else:
+            raise RuntimeError(f'No bag file found in {args.bag}')
+    else:
+        storage_id = 'mcap' if args.bag.endswith('.mcap') else 'sqlite3'
     reader.open(
-        StorageOptions(uri=args.bag, storage_id='sqlite3'),
+        StorageOptions(uri=uri, storage_id=storage_id),
         ConverterOptions('', '')
     )
 
@@ -49,7 +63,8 @@ def main():
             if topic != args.topic:
                 continue
             msg = deserialize_message(data, Odometry)
-            ts = t_ns / 1e9
+            # Use header stamp (sim time) not bag recording time
+            ts = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
             p  = msg.pose.pose.position
             o  = msg.pose.pose.orientation
             f.write(f'{ts:.9f} '

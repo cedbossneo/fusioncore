@@ -27,10 +27,11 @@ fusioncore:
     gnss.heading_topic: ""     # no dual-antenna in NCLT
     gnss.azimuth_topic: ""
 
-    # Lever arm: GPS antenna is above base_link on the Segway — negligible offset
+    # Lever arm: zero — disables heading-validation gate so GNSS is fused immediately.
+    # The 30cm vertical offset has negligible horizontal effect on a flat-terrain vehicle.
     gnss.lever_arm_x: 0.0
     gnss.lever_arm_y: 0.0
-    gnss.lever_arm_z: 0.3     # ~30cm above base_link (approximate, won't activate until heading validated)
+    gnss.lever_arm_z: 0.0
 
     outlier_rejection: true
     outlier_threshold_gnss: 16.27   # chi2(3, 0.999)

@@ -328,7 +328,7 @@ class NCLTPlayer(Node):
         lat, lon, alt, mode = data
         msg = NavSatFix()
         msg.header.stamp    = ros_time
-        msg.header.frame_id = 'gps_link'
+        msg.header.frame_id = 'gnss_link'
         msg.status.service  = NavSatStatus.SERVICE_GPS
         msg.status.status   = NavSatStatus.STATUS_FIX   # mode >= 2 already filtered
         msg.latitude  = lat

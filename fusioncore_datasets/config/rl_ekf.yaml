@@ -1,7 +1,7 @@
 # robot_localization EKF config for NCLT benchmark
 # Sensor inputs: IMU (orientation + angular vel + accel) + wheel odometry
 # GPS handled separately by navsat_transform → feeds as odom1
-ekf_filter_node:
+rl_ekf:
   ros__parameters:
     frequency: 50.0
     sensor_timeout: 0.5

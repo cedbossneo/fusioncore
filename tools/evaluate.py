@@ -10,9 +10,8 @@ Prerequisites:
 
 Usage:
   # Step 1: Convert NCLT ground truth to TUM
-  python3 tools/nclt_gt_to_tum.py \
-    --gt  /path/to/nclt/2012-01-08/groundtruth_2012-01-08.csv \
-    --gps /path/to/nclt/2012-01-08/gps.csv \
+  python3 tools/nclt_rtk_to_tum.py \
+    --rtk /path/to/nclt/2012-01-08/gps_rtk.csv \
     --out ground_truth.tum
 
   # Step 2: Extract filter outputs from results bag
@@ -36,7 +35,7 @@ from pathlib import Path
 
 
 def run_evo(cmd: list, label: str) -> dict:
-    """Run an evo CLI command and parse RMSE from its output."""
+    """Run an evo CLI command and parse RMSE from its stdout."""
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f'[WARN] evo failed for {label}:')
@@ -60,10 +59,7 @@ def evo_ape(gt: str, est: str, label: str, out_dir: str) -> dict:
     cmd = [
         'evo_ape', 'tum', gt, est,
         '--align',
-        '--correct_scale',
-        '-p',
-        '--save_plot', plot_path,
-        '--silent',
+        '--t_max_diff', '0.1',
     ]
     m = run_evo(cmd, f'ATE {label}')
     print(f'  ATE {label:20s}  RMSE={m.get("rmse", float("nan")):.3f}m  '
@@ -76,11 +72,9 @@ def evo_rpe(gt: str, est: str, label: str, out_dir: str, delta: float = 10.0) ->
     cmd = [
         'evo_rpe', 'tum', gt, est,
         '--align',
+        '--t_max_diff', '0.1',
         '--delta', str(delta),
         '--delta_unit', 'm',
-        '-p',
-        '--save_plot', plot_path,
-        '--silent',
     ]
     m = run_evo(cmd, f'RPE {label}')
     print(f'  RPE {label:20s}  RMSE={m.get("rmse", float("nan")):.3f}m  '
@@ -92,8 +86,7 @@ def traj_plot(gt: str, estimates: dict, out_dir: str, title: str):
     """Overlay all trajectories in one plot."""
     plot_path = os.path.join(out_dir, 'trajectories.png')
     cmd = ['evo_traj', 'tum', '--ref', gt] + list(estimates.values()) + \
-          ['-p', '--save_plot', plot_path, '--silent',
-           '--plot_mode', 'xy']
+          ['-p', '--save_plot', plot_path, '--plot_mode', 'xy']
     subprocess.run(cmd, capture_output=True)
     print(f'  Trajectory overlay → {plot_path}')
 
@@ -119,9 +112,9 @@ def write_markdown(results: dict, sequence: str, out_dir: str):
         f.write('\n## Methodology\n\n')
         f.write('- Dataset: NCLT (University of Michigan)\n')
         f.write(f'- Sequence: {sequence}\n')
-        f.write('- Ground truth: RTK post-processed lat/lon → local ENU\n')
+        f.write('- Ground truth: RTK GPS (gps_rtk.csv) projected to local ENU\n')
         f.write('- Evaluation tool: [evo](https://github.com/MichaelGrupp/evo)\n')
-        f.write('- Alignment: SE(3) alignment with scale correction\n')
+        f.write('- Alignment: SE(3) alignment\n')
         f.write('- Sensor inputs: identical for all filters (IMU + wheel odom + GPS)\n\n')
         f.write('### Reproducing\n\n')
         f.write('```bash\n')
@@ -129,10 +122,12 @@ def write_markdown(results: dict, sequence: str, out_dir: str):
         f.write('# 2. Run benchmark\n')
         f.write(f'ros2 launch fusioncore_datasets nclt_benchmark.launch.py \\\n')
         f.write(f'  data_dir:=/path/to/nclt/{sequence} output_bag:=./nclt_results\n')
-        f.write('# 3. Evaluate\n')
-        f.write('python3 tools/nclt_gt_to_tum.py --gt groundtruth.csv --gps gps.csv --out gt.tum\n')
+        f.write('# 3. Convert ground truth\n')
+        f.write('python3 tools/nclt_rtk_to_tum.py --rtk gps_rtk.csv --out gt.tum\n')
+        f.write('# 4. Extract trajectories\n')
         f.write('python3 tools/odom_to_tum.py --bag ./nclt_results --topic /fusion/odom --out fc.tum\n')
         f.write('python3 tools/odom_to_tum.py --bag ./nclt_results --topic /rl/odometry --out rl.tum\n')
+        f.write('# 5. Evaluate\n')
         f.write(f'python3 tools/evaluate.py --gt gt.tum --fusioncore fc.tum --rl rl.tum --sequence {sequence}\n')
         f.write('```\n')
 
@@ -152,7 +147,6 @@ def main():
                         help='RPE segment length in meters (default: 10)')
     args = parser.parse_args()
 
-    # Verify files exist
     for path, name in [(args.gt, 'ground truth'), (args.fusioncore, 'FusionCore'),
                        (args.rl, 'robot_localization')]:
         if not os.path.exists(path):

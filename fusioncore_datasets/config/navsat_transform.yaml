@@ -8,9 +8,9 @@ navsat_transform:
     delay: 0.0
     magnetic_declination_radians: 0.0   # not using magnetometer
     yaw_offset: 0.0
-    zero_altitude: false
+    zero_altitude: true               # ground robot: z from GPS is unreliable, keep z=0
     broadcast_utm_transform: false
     publish_filtered_gps: false
-    use_odometry_yaw: true              # get heading from EKF output
+    use_odometry_yaw: false             # use GPS track heading — breaks circular EKF↔navsat dependency
     wait_for_datum: false               # auto-initialize from first GPS fix
     use_sim_time: true

@@ -75,16 +75,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='gps_tf',
         arguments=['--z', '0.3',
-                   '--frame-id', 'base_link', '--child-frame-id', 'gps_link'],
-        parameters=[{'use_sim_time': True}],
-    )
-
-    # odom -> base_link identity (FusionCore publishes the real TF; this covers RL)
-    odom_tf = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='odom_tf',
-        arguments=['--frame-id', 'odom', '--child-frame-id', 'base_link'],
+                   '--frame-id', 'base_link', '--child-frame-id', 'gnss_link'],
         parameters=[{'use_sim_time': True}],
     )
 
@@ -99,7 +90,7 @@ def generate_launch_description():
     )
 
     configure_fc = TimerAction(
-        period=2.0,
+        period=4.0,
         actions=[
             EmitEvent(event=ChangeState(
                 lifecycle_node_matcher=lambda a: a == fusioncore_node,
@@ -152,7 +143,7 @@ def generate_launch_description():
     # ── bag recorder ─────────────────────────────────────────────────────────
     # Records both filter outputs for offline evaluation with tools/evaluate.py
     recorder = TimerAction(
-        period=3.0,   # give nodes 3s to initialize before recording
+        period=6.0,   # wait for FC configure(4s) + activate before recording
         actions=[
             ExecuteProcess(
                 cmd=[
@@ -173,7 +164,6 @@ def generate_launch_description():
         nclt_player,
         imu_tf,
         gps_tf,
-        odom_tf,
         fusioncore_node,
         configure_fc,
         activate_fc,
