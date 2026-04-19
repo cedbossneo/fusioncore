@@ -2,16 +2,21 @@
 """
 NCLT dataset player for FusionCore benchmarking.
 
-Reads the University of Michigan NCLT CSV files and publishes them as
-standard ROS2 sensor topics with a simulated clock. Both FusionCore and
-robot_localization consume the same data stream.
+Reads NCLT CSV files and publishes as ROS2 sensor topics with simulated clock.
 
 NCLT download: http://robots.engin.umich.edu/nclt/
-Expected files in <data_dir>/:
-  ms25_euler.csv          utime, roll, pitch, yaw, wx, wy, wz, ax, ay, az
-  gps.csv                 utime, lat, lon, alt, mode
-  odometry_mu_100hz.csv   utime, x, y, heading   (integrated wheel odometry)
-  groundtruth_*.csv       utime, lat, lon, alt    (RTK post-processed, optional)
+
+File formats (verified against 2012-01-08 sequence):
+  ms25.csv            utime, mag_x, mag_y, mag_z, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z
+  ms25_euler.csv      utime, roll, pitch, yaw       (Euler angles from on-board AHRS)
+  gps.csv             utime, mode, ?, lat_rad, lon_rad, alt_m, ?, ?
+  odometry_mu_100hz.csv  utime, x, y, z, roll, pitch, yaw   (integrated wheel odometry)
+
+Frame convention:
+  NCLT IMU (Microstrain 3DM-GX3-45) is mounted NED-like: x-forward, y-right, z-down.
+  FusionCore expects ENU body frame: x-forward, y-left, z-up.
+  Conversion: ay_enu = -ay_ned, az_enu = -az_ned, wy_enu = -wy_ned, wz_enu = -wz_ned.
+  After conversion: az ≈ +9.81 m/s² when flat and stationary (correct for FusionCore).
 
 Usage:
   ros2 run fusioncore_datasets nclt_player.py \
@@ -34,17 +39,10 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
 
 
-# ─── helpers ──────────────────────────────────────────────────────────────────
-
-def utime_to_ros(utime_us: int) -> Time:
-    ns = utime_us * 1000
-    t = Time()
-    t.sec = int(ns // 1_000_000_000)
-    t.nanosec = int(ns % 1_000_000_000)
-    return t
-
+# ─── coordinate helpers ───────────────────────────────────────────────────────
 
 def euler_to_quat(roll: float, pitch: float, yaw: float) -> Quaternion:
+    """ZYX Euler (rad) → quaternion."""
     cr, sr = math.cos(roll / 2), math.sin(roll / 2)
     cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
     cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
@@ -58,11 +56,17 @@ def euler_to_quat(roll: float, pitch: float, yaw: float) -> Quaternion:
 
 def angle_diff(a: float, b: float) -> float:
     d = a - b
-    while d > math.pi:
-        d -= 2 * math.pi
-    while d < -math.pi:
-        d += 2 * math.pi
+    while d > math.pi:  d -= 2 * math.pi
+    while d < -math.pi: d += 2 * math.pi
     return d
+
+
+def utime_to_ros(utime_us: int) -> Time:
+    ns = utime_us * 1000
+    t = Time()
+    t.sec = int(ns // 1_000_000_000)
+    t.nanosec = int(ns % 1_000_000_000)
+    return t
 
 
 # ─── node ─────────────────────────────────────────────────────────────────────
@@ -74,88 +78,46 @@ class NCLTPlayer(Node):
 
         self.declare_parameter('data_dir', '')
         self.declare_parameter('playback_rate', 1.0)
-        # Optional: truncate playback. 0 = play all.
         self.declare_parameter('duration_s', 0.0)
 
         data_dir = self.get_parameter('data_dir').value
         if not data_dir:
             raise RuntimeError('nclt_player: data_dir parameter is required')
 
-        self._rate = self.get_parameter('playback_rate').value
+        self._rate     = self.get_parameter('playback_rate').value
         self._duration = self.get_parameter('duration_s').value
 
-        self._clock_pub = self.create_publisher(Clock,      '/clock',       10)
-        self._imu_pub   = self.create_publisher(Imu,        '/imu/data',    50)
-        self._gps_pub   = self.create_publisher(NavSatFix,  '/gnss/fix',    10)
-        self._odom_pub  = self.create_publisher(Odometry,   '/odom/wheels', 50)
+        self._clock_pub = self.create_publisher(Clock,     '/clock',       10)
+        self._imu_pub   = self.create_publisher(Imu,       '/imu/data',    50)
+        self._gps_pub   = self.create_publisher(NavSatFix, '/gnss/fix',    10)
+        self._odom_pub  = self.create_publisher(Odometry,  '/odom/wheels', 50)
 
         self.get_logger().info(f'Loading NCLT data from: {data_dir}')
-        self._events = []   # list of (utime_us, kind, payload)
-        self._load_imu(os.path.join(data_dir, 'ms25_euler.csv'))
+
+        # Load Euler angles separately (for orientation embed in IMU message)
+        euler_table = self._load_euler(os.path.join(data_dir, 'ms25_euler.csv'))
+
+        self._events = []
+        self._load_imu(os.path.join(data_dir, 'ms25.csv'), euler_table)
         self._load_gps(os.path.join(data_dir, 'gps.csv'))
         self._load_odom(self._find_odom(data_dir))
 
         self._events.sort(key=lambda e: e[0])
-        total = len(self._events)
         self.get_logger().info(
-            f'Loaded {total} events ({self._count("imu")} IMU, '
-            f'{self._count("gps")} GPS, {self._count("odom")} odom). '
-            f'Playback rate: {self._rate}x')
+            f'Loaded {len(self._events)} events  '
+            f'({self._count("imu")} IMU, {self._count("gps")} GPS, '
+            f'{self._count("odom")} odom)  rate={self._rate}x')
 
-        t = threading.Thread(target=self._play, daemon=True)
-        t.start()
+        threading.Thread(target=self._play, daemon=True).start()
 
     # ── loaders ───────────────────────────────────────────────────────────────
 
-    def _find_odom(self, data_dir: str) -> str:
-        for name in ('odometry_mu_100hz.csv', 'odometry_100hz.csv', 'wheels.csv'):
-            p = os.path.join(data_dir, name)
-            if os.path.exists(p):
-                return p
-        raise RuntimeError(
-            f'nclt_player: no wheel odometry file found in {data_dir}. '
-            'Expected odometry_mu_100hz.csv')
-
-    def _load_imu(self, path: str):
-        count = 0
-        with open(path) as f:
-            for row in csv.reader(f):
-                if not row or row[0].startswith('#'):
-                    continue
-                try:
-                    utime = int(row[0])
-                    # roll, pitch, yaw (rad) | wx, wy, wz (rad/s) | ax, ay, az (m/s²)
-                    vals = [float(v) for v in row[1:10]]
-                    self._events.append((utime, 'imu', vals))
-                    count += 1
-                except (ValueError, IndexError):
-                    continue
-        self.get_logger().info(f'  IMU: {count} rows from {os.path.basename(path)}')
-
-    def _load_gps(self, path: str):
-        count = 0
-        skipped = 0
-        with open(path) as f:
-            for row in csv.reader(f):
-                if not row or row[0].startswith('#'):
-                    continue
-                try:
-                    utime = int(row[0])
-                    lat, lon, alt = float(row[1]), float(row[2]), float(row[3])
-                    mode = int(float(row[4]))  # 1=no_fix, 2=2D, 3=3D
-                    if mode < 2:
-                        skipped += 1
-                        continue
-                    self._events.append((utime, 'gps', [lat, lon, alt, mode]))
-                    count += 1
-                except (ValueError, IndexError):
-                    continue
-        self.get_logger().info(
-            f'  GPS: {count} fixes ({skipped} no-fix skipped) from {os.path.basename(path)}')
-
-    def _load_odom(self, path: str):
-        # NCLT provides integrated odometry (x, y, heading). Differentiate to
-        # get body-frame velocity (vx, omega) for FusionCore's encoder update.
+    def _load_euler(self, path: str) -> list:
+        """
+        Load ms25_euler.csv → sorted list of (utime, roll, pitch, yaw).
+        Format: utime, roll, pitch, yaw   (4 columns, angles in radians)
+        Frame: NED-like. Convert pitch/yaw sign for ENU: pitch_enu=-pitch, yaw_enu=-yaw.
+        """
         rows = []
         with open(path) as f:
             for row in csv.reader(f):
@@ -163,8 +125,117 @@ class NCLTPlayer(Node):
                     continue
                 try:
                     utime = int(row[0])
-                    x, y, h = float(row[1]), float(row[2]), float(row[3])
-                    rows.append((utime, x, y, h))
+                    roll  = float(row[1])
+                    pitch = -float(row[2])  # NED→ENU: negate pitch
+                    yaw   = -float(row[3])  # NED→ENU: negate yaw
+                    rows.append((utime, roll, pitch, yaw))
+                except (ValueError, IndexError):
+                    continue
+        rows.sort(key=lambda r: r[0])
+        self.get_logger().info(f'  Euler: {len(rows)} rows from {os.path.basename(path)}')
+        return rows
+
+    def _nearest_euler(self, euler_table: list, utime: int):
+        """Binary-search euler_table for the entry nearest to utime."""
+        lo, hi = 0, len(euler_table) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if euler_table[mid][0] < utime:
+                lo = mid + 1
+            else:
+                hi = mid
+        # lo is the first entry >= utime; compare with lo-1 as well
+        if lo > 0 and abs(euler_table[lo-1][0] - utime) < abs(euler_table[lo][0] - utime):
+            lo -= 1
+        return euler_table[lo]
+
+    def _load_imu(self, path: str, euler_table: list):
+        """
+        Load ms25.csv → IMU events.
+        Format: utime, mag_x, mag_y, mag_z, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z
+        NED→ENU conversion: ay_enu=-ay, az_enu=-az, wy_enu=-wy, wz_enu=-wz
+        Orientation is taken from the nearest ms25_euler.csv sample.
+        """
+        count = 0
+        with open(path) as f:
+            for row in csv.reader(f):
+                if not row or row[0].startswith('#'):
+                    continue
+                try:
+                    utime = int(row[0])
+                    # cols 1-3: magnetometer (ignored)
+                    ax =  float(row[4])
+                    ay = -float(row[5])   # NED y-right → ENU y-left
+                    az = -float(row[6])   # NED z-down  → ENU z-up  (+9.81 when flat)
+                    wx =  float(row[7])
+                    wy = -float(row[8])   # NED→ENU
+                    wz = -float(row[9])   # NED→ENU
+                    _, roll, pitch, yaw = self._nearest_euler(euler_table, utime)
+                    self._events.append((utime, 'imu', [wx, wy, wz, ax, ay, az, roll, pitch, yaw]))
+                    count += 1
+                except (ValueError, IndexError):
+                    continue
+        self.get_logger().info(f'  IMU:  {count} rows from {os.path.basename(path)}')
+
+    def _load_gps(self, path: str):
+        """
+        Load gps.csv → GPS events.
+        Format: utime, mode, ?, lat_rad, lon_rad, alt_m, ?, ?
+        lat/lon are in RADIANS — must convert to degrees.
+        mode: 2=2D fix (no altitude), 3=3D fix.
+        """
+        count, skipped = 0, 0
+        with open(path) as f:
+            for row in csv.reader(f):
+                if not row or row[0].startswith('#'):
+                    continue
+                try:
+                    utime = int(row[0])
+                    mode  = int(float(row[1]))
+                    lat_r = float(row[3])
+                    lon_r = float(row[4])
+                    alt_s = row[5].strip()
+
+                    if mode < 2:
+                        skipped += 1
+                        continue
+
+                    lat_deg = math.degrees(lat_r)
+                    lon_deg = math.degrees(lon_r)
+                    # Altitude is nan for 2D fixes — fall back to 0
+                    alt_m   = float(alt_s) if alt_s.lower() != 'nan' else 0.0
+
+                    self._events.append((utime, 'gps', [lat_deg, lon_deg, alt_m, mode]))
+                    count += 1
+                except (ValueError, IndexError):
+                    continue
+        self.get_logger().info(f'  GPS:  {count} fixes ({skipped} no-fix skipped)')
+
+    def _find_odom(self, data_dir: str) -> str:
+        for name in ('odometry_mu_100hz.csv', 'odometry_100hz.csv'):
+            p = os.path.join(data_dir, name)
+            if os.path.exists(p):
+                return p
+        raise RuntimeError(f'No wheel odometry file found in {data_dir}')
+
+    def _load_odom(self, path: str):
+        """
+        Load odometry_mu_100hz.csv → velocity events.
+        Format: utime, x, y, z, roll, pitch, yaw   (7 columns)
+        Differentiate position to get body-frame velocity.
+        Heading = col[6] (yaw).
+        """
+        rows = []
+        with open(path) as f:
+            for row in csv.reader(f):
+                if not row or row[0].startswith('#'):
+                    continue
+                try:
+                    utime = int(row[0])
+                    x     = float(row[1])
+                    y     = float(row[2])
+                    yaw   = float(row[6])    # heading is col 6, NOT col 3
+                    rows.append((utime, x, y, yaw))
                 except (ValueError, IndexError):
                     continue
 
@@ -173,12 +244,11 @@ class NCLTPlayer(Node):
             utime, x, y, h = rows[i]
             p_utime, px, py, ph = rows[i - 1]
             dt = (utime - p_utime) / 1e6
-            if dt <= 0 or dt > 0.5:   # skip gaps and backwards timestamps
+            if dt <= 0 or dt > 0.5:
                 continue
             dx, dy = x - px, y - py
-            # Body-frame: project world displacement onto current heading
-            vx = ( dx * math.cos(h) + dy * math.sin(h)) / dt
-            vy = (-dx * math.sin(h) + dy * math.cos(h)) / dt  # ≈0 for diff drive
+            vx    = ( dx * math.cos(h) + dy * math.sin(h)) / dt
+            vy    = (-dx * math.sin(h) + dy * math.cos(h)) / dt  # ≈0 for diff drive
             omega = angle_diff(h, ph) / dt
             self._events.append((utime, 'odom', [vx, vy, omega]))
             count += 1
@@ -187,61 +257,51 @@ class NCLTPlayer(Node):
     def _count(self, kind: str) -> int:
         return sum(1 for e in self._events if e[1] == kind)
 
-    # ── playback thread ───────────────────────────────────────────────────────
+    # ── playback ──────────────────────────────────────────────────────────────
 
     def _play(self):
         if not self._events:
-            self.get_logger().error('No events to play')
+            self.get_logger().error('No events loaded')
             return
 
         sim_start_us = self._events[0][0]
-        wall_start = time.monotonic()
+        wall_start   = time.monotonic()
 
         for utime, kind, data in self._events:
-            # Duration limit
-            if self._duration > 0:
-                sim_elapsed_s = (utime - sim_start_us) / 1e6
-                if sim_elapsed_s > self._duration:
-                    break
+            if self._duration > 0 and (utime - sim_start_us) / 1e6 > self._duration:
+                break
 
-            # Sleep until this event's wall time
-            sim_offset_s = (utime - sim_start_us) / 1e6
-            target_wall = wall_start + sim_offset_s / self._rate
-            sleep_s = target_wall - time.monotonic()
+            sleep_s = wall_start + (utime - sim_start_us) / 1e6 / self._rate - time.monotonic()
             if sleep_s > 0:
                 time.sleep(sleep_s)
 
             ros_time = utime_to_ros(utime)
 
-            # Advance the simulated clock
             clk = Clock()
             clk.clock = ros_time
             self._clock_pub.publish(clk)
 
-            if kind == 'imu':
-                self._pub_imu(ros_time, data)
-            elif kind == 'gps':
-                self._pub_gps(ros_time, data)
-            elif kind == 'odom':
-                self._pub_odom(ros_time, data)
+            if   kind == 'imu':  self._pub_imu(ros_time, data)
+            elif kind == 'gps':  self._pub_gps(ros_time, data)
+            elif kind == 'odom': self._pub_odom(ros_time, data)
 
         self.get_logger().info('Playback complete.')
 
     # ── publishers ────────────────────────────────────────────────────────────
 
     def _pub_imu(self, ros_time: Time, data: list):
-        roll, pitch, yaw, wx, wy, wz, ax, ay, az = data
+        wx, wy, wz, ax, ay, az, roll, pitch, yaw = data
         msg = Imu()
         msg.header.stamp    = ros_time
         msg.header.frame_id = 'imu_link'
 
-        # Orientation from the Microstrain's onboard AHRS — useful for
-        # robot_localization which fuses it. FusionCore uses wx/wy/wz + ax/ay/az.
+        # Orientation from AHRS (roll/pitch accurate, yaw unreliable without mag)
+        # FusionCore will use only roll/pitch when imu_has_magnetometer: false
         msg.orientation = euler_to_quat(roll, pitch, yaw)
         msg.orientation_covariance = [
             1e-4, 0.0,  0.0,
             0.0,  1e-4, 0.0,
-            0.0,  0.0,  1e-3,   # yaw less accurate without GPS heading
+            0.0,  0.0,  1e6,    # large yaw covariance → FC ignores yaw (6-axis mode)
         ]
 
         msg.angular_velocity.x = wx
@@ -256,8 +316,7 @@ class NCLTPlayer(Node):
 
         msg.linear_acceleration.x = ax
         msg.linear_acceleration.y = ay
-        msg.linear_acceleration.z = az  # includes gravity (+9.81 when flat)
-        # Velocity random walk ≈ 0.03 m/s/√hr → σ ≈ 0.001 m/s²; use 0.1 to be safe
+        msg.linear_acceleration.z = az   # ≈ +9.81 when flat (after NED→ENU)
         msg.linear_acceleration_covariance = [
             0.01, 0.0,  0.0,
             0.0,  0.01, 0.0,
@@ -271,16 +330,15 @@ class NCLTPlayer(Node):
         msg.header.stamp    = ros_time
         msg.header.frame_id = 'gps_link'
         msg.status.service  = NavSatStatus.SERVICE_GPS
-        msg.status.status   = (NavSatStatus.STATUS_FIX
-                               if mode >= 2 else NavSatStatus.STATUS_NO_FIX)
+        msg.status.status   = NavSatStatus.STATUS_FIX   # mode >= 2 already filtered
         msg.latitude  = lat
         msg.longitude = lon
         msg.altitude  = alt
-        # NCLT Novatel SPAN-CPT standard GPS: ~3m CEP → σ_xy ≈ 3m → var ≈ 9m²
+        # NCLT standard GPS: ~3m CEP → σ_xy ≈ 3m → var ≈ 9m²
         msg.position_covariance = [
             9.0, 0.0,  0.0,
             0.0, 9.0,  0.0,
-            0.0, 0.0, 25.0,   # vertical less accurate
+            0.0, 0.0, 25.0,
         ]
         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
         self._gps_pub.publish(msg)
@@ -292,12 +350,11 @@ class NCLTPlayer(Node):
         msg.header.frame_id  = 'odom'
         msg.child_frame_id   = 'base_link'
         msg.twist.twist.linear.x  = vx
-        msg.twist.twist.linear.y  = vy    # ≈ 0 for differential drive
+        msg.twist.twist.linear.y  = vy
         msg.twist.twist.angular.z = omega
-        # Segway RMP encoder noise: ~2% of velocity
-        msg.twist.covariance[0]  = 0.04   # vx (m/s)²
-        msg.twist.covariance[7]  = 0.01   # vy
-        msg.twist.covariance[35] = 0.001  # omega (rad/s)²
+        msg.twist.covariance[0]  = 0.04
+        msg.twist.covariance[7]  = 0.01
+        msg.twist.covariance[35] = 0.001
         self._odom_pub.publish(msg)
 
 
