@@ -136,12 +136,14 @@ def plot_trajectory(seq, out_dir):
     # Clip GT to the same view window for context
     gt_mask = (gt_x >= xlo) & (gt_x <= xhi) & (gt_y >= ylo) & (gt_y <= yhi)
 
-    ax.plot(gt_x[gt_mask], gt_y[gt_mask],
-            color=C_GT, lw=2.0, alpha=0.6, label='Ground Truth (RTK GPS)', zorder=1)
     ax.plot(ek_al[:, 0], ek_al[:, 1],
-            color=C_EKF, lw=1.8, alpha=0.75, label='RL-EKF  (ATE 23.4 m)', zorder=2)
+            color=C_EKF, lw=2.0, alpha=0.8, label='RL-EKF  (ATE 23.4 m)', zorder=2)
     ax.plot(fc_al[:, 0], fc_al[:, 1],
-            color=C_FC, lw=2.4, alpha=0.95, label='FusionCore  (ATE 5.5 m)', zorder=3)
+            color=C_FC, lw=2.0, alpha=0.8, label='FusionCore  (ATE 5.5 m)', zorder=3)
+    # GT on top, dashed so it's visible even where it overlaps FC/EKF
+    ax.plot(gt_x[gt_mask], gt_y[gt_mask],
+            color='#111827', lw=1.8, ls='--', alpha=0.9,
+            label='Ground Truth (RTK GPS)', zorder=4)
 
     ax.plot(fc_al[0, 0], fc_al[0, 1], 'o', color=TEXT, ms=7, zorder=5)
     ax.text(fc_al[0, 0] + 8, fc_al[0, 1] + 8, 'Start', fontsize=9, color=TEXT)
