@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
 FusionCore NCLT benchmark visualizer.
+Outputs one PNG per result — each is self-contained and presentation-ready.
 
 Usage:
-  python3 tools/plot_benchmark.py \
-    --seq_dir  benchmarks/nclt/2012-01-08 \
-    --out      benchmarks/nclt/2012-01-08/results/benchmark_plot.png
+  python3 tools/plot_benchmark.py --seq_dir benchmarks/nclt/2012-01-08
 """
 
 import argparse
@@ -15,33 +14,30 @@ from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.patheffects as pe
+import matplotlib.ticker as ticker
 import numpy as np
 
-# ── Design tokens ──────────────────────────────────────────────────────────
-BG      = '#FFFFFF'
-PANEL   = '#F8FAFC'
-BORDER  = '#E2E8F0'
-TEXT    = '#0F172A'
-SUBTLE  = '#64748B'
-C_FC    = '#2563EB'
-C_EKF   = '#DC2626'
-C_UKF   = '#7C3AED'
-C_GT    = '#94A3B8'
-GREEN   = '#16A34A'
-RED_L   = '#FEE2E2'
-BLUE_L  = '#EFF6FF'
+# ── Palette ────────────────────────────────────────────────────────────────
+BG     = '#FFFFFF'
+PANEL  = '#F8FAFC'
+BORDER = '#E2E8F0'
+TEXT   = '#0F172A'
+MUTED  = '#64748B'
+C_FC   = '#2563EB'
+C_EKF  = '#DC2626'
+C_UKF  = '#7C3AED'
+C_GT   = '#94A3B8'
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────
 def load_tum(path):
     rows = []
     with open(path) as f:
         for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
+            s = line.strip()
+            if not s or s.startswith('#'):
                 continue
-            p = line.split()
+            p = s.split()
             if len(p) < 4:
                 continue
             vals = [float(v) for v in p[:4]]
@@ -49,9 +45,9 @@ def load_tum(path):
                 continue
             rows.append(vals)
     if not rows:
-        return [np.array([]) for _ in range(4)]
-    arr = np.array(rows)
-    return arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+        return tuple(np.array([]) for _ in range(4))
+    a = np.array(rows)
+    return a[:, 0], a[:, 1], a[:, 2], a[:, 3]
 
 
 def align_se2(src_xy, ref_xy):
@@ -66,296 +62,276 @@ def align_se2(src_xy, ref_xy):
     if np.linalg.det(R) < 0:
         Vt[-1] *= -1
         R = Vt.T @ U.T
-    t = mu_r - R @ mu_s
-    return (R @ src_xy.T).T + t
+    return (R @ src_xy.T).T + (mu_r - R @ mu_s)
 
 
-def interp_error(est_ts, est_x, est_y, gt_ts, gt_x, gt_y):
+def interp_error_2d(est_ts, est_x, est_y, gt_ts, gt_x, gt_y):
     errs = np.full(len(est_ts), np.nan)
     for i, t in enumerate(est_ts):
         idx = np.searchsorted(gt_ts, t)
         if idx == 0 or idx >= len(gt_ts):
             continue
-        t0, t1 = gt_ts[idx-1], gt_ts[idx]
+        t0, t1 = gt_ts[idx - 1], gt_ts[idx]
         if t1 == t0:
             continue
         a = (t - t0) / (t1 - t0)
-        gx = gt_x[idx-1] + a*(gt_x[idx] - gt_x[idx-1])
-        gy = gt_y[idx-1] + a*(gt_y[idx] - gt_y[idx-1])
+        gx = gt_x[idx - 1] + a * (gt_x[idx] - gt_x[idx - 1])
+        gy = gt_y[idx - 1] + a * (gt_y[idx] - gt_y[idx - 1])
         errs[i] = math.hypot(est_x[i] - gx, est_y[i] - gy)
     return errs
 
 
-def card_bg(ax, color=PANEL):
-    ax.set_facecolor(color)
+def base_fig(w=12, h=7.5):
+    fig, ax = plt.subplots(figsize=(w, h), facecolor=BG)
+    ax.set_facecolor(BG)
+    ax.tick_params(colors=MUTED, labelsize=10)
     for sp in ax.spines.values():
         sp.set_edgecolor(BORDER)
-        sp.set_linewidth(1.0)
+    return fig, ax
 
 
-def section_label(ax, text, color=SUBTLE):
-    ax.text(0, 1.04, text.upper(), transform=ax.transAxes,
-            fontsize=7.5, color=color, fontweight='bold',
-            fontfamily='monospace', va='bottom')
+def set_titles(fig, title, subtitle):
+    fig.text(0.5, 0.96, title, ha='center', fontsize=17,
+             fontweight='bold', color=TEXT)
+    fig.text(0.5, 0.915, subtitle, ha='center', fontsize=10.5, color=MUTED)
 
 
-def verdict_badge(ax, x, y, text, good=True, fontsize=9):
+def badge(ax, x, y, text, good=True, size=10):
     bg = '#DCFCE7' if good else '#FEE2E2'
     tc = '#15803D' if good else '#B91C1C'
-    ax.text(x, y, text, transform=ax.transAxes,
-            fontsize=fontsize, color=tc, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.35', facecolor=bg, edgecolor='none'))
+    ax.text(x, y, text, transform=ax.transAxes, fontsize=size,
+            color=tc, fontweight='bold', va='top',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor=bg, edgecolor='none'))
 
 
+def save(fig, path):
+    fig.savefig(str(path), dpi=160, bbox_inches='tight', facecolor=BG)
+    plt.close(fig)
+    print(f'  → {path}')
+
+
+# ── Chart 1: Trajectory ───────────────────────────────────────────────────
+def plot_trajectory(seq, out_dir):
+    gt_ts, gt_x, gt_y, _ = load_tum(str(seq / 'ground_truth.tum'))
+    fc_ts, fc_x, fc_y, _ = load_tum(str(seq / 'fusioncore.tum'))
+    ek_ts, ek_x, ek_y, _ = load_tum(str(seq / 'rl_ekf.tum'))
+
+    fig, ax = base_fig(10, 10)
+    fig.subplots_adjust(left=0.1, right=0.92, top=0.88, bottom=0.08)
+    set_titles(fig,
+               'Route Accuracy — 600 s Campus Drive',
+               'NCLT 2012-01-08  •  RTK GPS ground truth  •  SE(2) aligned')
+
+    gt_xy = np.stack([gt_x, gt_y], 1)
+    fc_al = align_se2(np.stack([fc_x, fc_y], 1), gt_xy)
+    ek_al = align_se2(np.stack([ek_x, ek_y], 1), gt_xy)
+
+    # Crop view to the region the filters actually cover, with padding
+    pad = 80
+    all_x = np.concatenate([fc_al[:, 0], ek_al[:, 0]])
+    all_y = np.concatenate([fc_al[:, 1], ek_al[:, 1]])
+    xlo, xhi = all_x.min() - pad, all_x.max() + pad
+    ylo, yhi = all_y.min() - pad, all_y.max() + pad
+
+    # Clip GT to the same view window for context
+    gt_mask = (gt_x >= xlo) & (gt_x <= xhi) & (gt_y >= ylo) & (gt_y <= yhi)
+
+    ax.plot(gt_x[gt_mask], gt_y[gt_mask],
+            color=C_GT, lw=2.0, alpha=0.6, label='Ground Truth (RTK GPS)', zorder=1)
+    ax.plot(ek_al[:, 0], ek_al[:, 1],
+            color=C_EKF, lw=1.8, alpha=0.75, label='RL-EKF  (ATE 23.4 m)', zorder=2)
+    ax.plot(fc_al[:, 0], fc_al[:, 1],
+            color=C_FC, lw=2.4, alpha=0.95, label='FusionCore  (ATE 5.5 m)', zorder=3)
+
+    ax.plot(fc_al[0, 0], fc_al[0, 1], 'o', color=TEXT, ms=7, zorder=5)
+    ax.text(fc_al[0, 0] + 8, fc_al[0, 1] + 8, 'Start', fontsize=9, color=TEXT)
+
+    ax.set_xlim(xlo, xhi)
+    ax.set_ylim(ylo, yhi)
+    ax.set_aspect('equal')
+    ax.set_xlabel('East (m)', fontsize=10, color=MUTED)
+    ax.set_ylabel('North (m)', fontsize=10, color=MUTED)
+    ax.grid(color=BORDER, lw=0.7, zorder=0)
+
+    leg = ax.legend(fontsize=10.5, loc='upper left',
+                    facecolor='white', edgecolor=BORDER, framealpha=1)
+    for t in leg.get_texts():
+        t.set_color(TEXT)
+
+    save(fig, out_dir / '01_trajectory.png')
+
+
+# ── Chart 2: ATE bar chart ────────────────────────────────────────────────
+def plot_ate(out_dir):
+    fig, ax = base_fig(9, 7)
+    fig.subplots_adjust(left=0.12, right=0.82, top=0.86, bottom=0.12)
+    set_titles(fig,
+               'FusionCore is 4.2× More Accurate',
+               'Absolute Trajectory Error (ATE RMSE)  •  lower is better')
+
+    names  = ['FusionCore', 'RL-EKF']
+    vals   = [5.517, 23.434]
+    colors = [C_FC, C_EKF]
+    alphas = [1.0, 0.85]
+
+    bars = ax.bar(names, vals, color=colors, width=0.45, zorder=3,
+                  alpha=1.0, edgecolor='none')
+
+    # value labels on top of bars
+    for bar, v in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.3,
+                f'{v:.1f} m', ha='center', va='bottom',
+                color=TEXT, fontsize=15, fontweight='bold')
+
+    # improvement arrow
+    x_arrow = 1.38
+    ax.annotate('', xy=(x_arrow, vals[0]), xytext=(x_arrow, vals[1]),
+                xycoords=('data', 'data'),
+                arrowprops=dict(arrowstyle='<->', color=MUTED, lw=1.8))
+    ax.text(x_arrow + 0.06, (vals[0] + vals[1]) / 2,
+            '4.2×\nmore\naccurate', ha='left', va='center',
+            color=TEXT, fontsize=12, fontweight='bold', linespacing=1.4,
+            transform=ax.get_xaxis_transform() if False else ax.transData)
+
+    ax.set_ylim(0, vals[1] * 1.3)
+    ax.set_xlim(-0.6, 1.9)
+    ax.set_ylabel('ATE RMSE (m)', fontsize=11, color=MUTED)
+    ax.tick_params(axis='x', labelsize=13, colors=TEXT)
+    ax.grid(axis='y', color=BORDER, lw=0.7, zorder=0)
+    ax.set_axisbelow(True)
+
+    badge(ax, 0.04, 0.97, '✓  Winner', good=True, size=10)
+
+    save(fig, out_dir / '02_ate.png')
+
+
+# ── Chart 3: GPS spike ────────────────────────────────────────────────────
+def plot_spike(seq, out_dir):
+    gt_ts, gt_x, gt_y, _ = load_tum(str(seq / 'ground_truth.tum'))
+    fc_ts, fc_x, fc_y, _ = load_tum(str(seq / 'fusioncore_spike.tum'))
+    ek_ts, ek_x, ek_y, _ = load_tum(str(seq / 'rl_ekf_spike.tum'))
+
+    SPIKE_T = 120.0
+    t0 = gt_ts[0]
+
+    def rel_errs(ts, x, y):
+        rel = ts - t0
+        errs = interp_error_2d(ts, x, y, gt_ts, gt_x, gt_y)
+        mask = (rel >= SPIKE_T - 35) & (rel <= SPIKE_T + 50)
+        return rel[mask] - SPIKE_T, errs[mask]
+
+    fig, ax = base_fig(12, 7)
+    fig.subplots_adjust(left=0.1, right=0.96, top=0.86, bottom=0.13)
+    set_titles(fig,
+               'FusionCore Rejects Corrupted GPS — RL-EKF Jumps 93 m',
+               'A single GPS fix was corrupted to +707 m NE  •  injected at t = 120 s')
+
+    fc_t, fc_e = rel_errs(fc_ts, fc_x, fc_y)
+    ek_t, ek_e = rel_errs(ek_ts, ek_x, ek_y)
+
+    ax.fill_between(ek_t, ek_e, alpha=0.12, color=C_EKF)
+    ax.plot(ek_t, ek_e, color=C_EKF, lw=2.2, label='RL-EKF — accepted fake fix, jumped 93 m')
+    ax.plot(fc_t, fc_e, color=C_FC,  lw=2.5, label='FusionCore — Mahalanobis gate blocked spike')
+
+    # spike line
+    ax.axvline(0, color='#EF4444', lw=1.8, ls='--', alpha=0.85, zorder=5)
+    ymax = np.nanmax(ek_e) if len(ek_e) else 100
+    ax.text(1.5, ymax * 0.97, '← 707 m fake fix\n   injected here',
+            color='#EF4444', fontsize=9.5, va='top', linespacing=1.5)
+
+    ax.set_xlabel('Seconds relative to spike injection', fontsize=11, color=MUTED)
+    ax.set_ylabel('Position error vs ground truth (m)', fontsize=11, color=MUTED)
+    ax.set_ylim(bottom=0)
+    ax.grid(color=BORDER, lw=0.7, zorder=0)
+    ax.set_axisbelow(True)
+
+    leg = ax.legend(fontsize=11, loc='upper left',
+                    facecolor='white', edgecolor=BORDER, framealpha=1)
+    for t in leg.get_texts():
+        t.set_color(TEXT)
+
+    badge(ax, 0.01, 0.97, '✓  FusionCore: +1 m  (REJECTED)', good=True,  size=10)
+    badge(ax, 0.01, 0.84, '✗  RL-EKF: +93 m  (JUMPED)',      good=False, size=10)
+
+    save(fig, out_dir / '03_spike.png')
+
+
+# ── Chart 4: RL-UKF divergence ────────────────────────────────────────────
+def plot_ukf(seq, out_dir):
+    gt_ts, gt_x, gt_y, _ = load_tum(str(seq / 'ground_truth.tum'))
+    uk_ts, uk_x, uk_y, _ = load_tum(str(seq / 'rl_ukf.tum'))
+    fc_ts, fc_x, fc_y, _ = load_tum(str(seq / 'fusioncore.tum'))
+
+    fig, ax = base_fig(12, 7)
+    fig.subplots_adjust(left=0.12, right=0.96, top=0.86, bottom=0.13)
+    set_titles(fig,
+               'RL-UKF Numerically Diverges at t = 31 s',
+               'FusionCore ran stably for 600 s on identical IMU data  •  RL-UKF published NaN from t = 31 s onward')
+
+    t0 = gt_ts[0]
+
+    # FC error vs GT (first 90s for context)
+    fc_rel = fc_ts - t0
+    fc_err = interp_error_2d(fc_ts, fc_x, fc_y, gt_ts, gt_x, gt_y)
+    mask90 = fc_rel <= 90
+    ax.plot(fc_rel[mask90], fc_err[mask90], color=C_FC, lw=2.2,
+            label='FusionCore — stays on route', zorder=3)
+
+    # UKF: only plot pre-divergence poses (magnitude < 1000 m is sane)
+    uk_rel = uk_ts - t0
+    valid = np.hypot(uk_x, uk_y) < 1000
+    uk_err = interp_error_2d(uk_ts[valid], uk_x[valid], uk_y[valid], gt_ts, gt_x, gt_y)
+    die_t = float(uk_rel[valid][-1]) if valid.any() else 31.0
+
+    ax.plot(uk_rel[valid], uk_err, color=C_UKF, lw=2.2,
+            label='RL-UKF — valid output before divergence', zorder=2)
+
+    # "Dead zone" shading after divergence
+    ax.axvspan(die_t, 90, color='#FEE2E2', alpha=0.35, zorder=0)
+    ax.axvline(die_t, color='#EF4444', lw=2.0, ls='--', zorder=5)
+
+    # Place annotation after axes are drawn so y-limits are known
+    ax.set_xlim(0, 90)
+    ax.set_ylim(bottom=0)
+    ax.figure.canvas.draw()
+    ymax = ax.get_ylim()[1]
+    ax.text(die_t + 2, ymax * 0.55,
+            f'RL-UKF dies\nt = {die_t:.0f} s\n\nAll subsequent\noutput: NaN',
+            color='#B91C1C', fontsize=9.5, va='center', linespacing=1.6)
+
+    ax.set_xlabel('Time (s)', fontsize=11, color=MUTED)
+    ax.set_ylabel('Position error vs ground truth (m)', fontsize=11, color=MUTED)
+    ax.grid(color=BORDER, lw=0.7, zorder=0)
+    ax.set_axisbelow(True)
+
+    leg = ax.legend(fontsize=11, loc='upper left',
+                    facecolor='white', edgecolor=BORDER, framealpha=1)
+    for t in leg.get_texts():
+        t.set_color(TEXT)
+
+    badge(ax, 0.01, 0.97, '✗  RL-UKF: dead in 31 s — NaN explosion', good=False, size=10)
+    badge(ax, 0.01, 0.84, '✓  FusionCore: stable for 600 s', good=True, size=10)
+
+    save(fig, out_dir / '04_ukf_divergence.png')
+
+
+# ── Entry point ───────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seq_dir', default='benchmarks/nclt/2012-01-08')
-    parser.add_argument('--out', default=None)
+    parser.add_argument('--out_dir', default=None)
     args = parser.parse_args()
 
-    seq = Path(args.seq_dir)
-    out = Path(args.out) if args.out else seq / 'results' / 'benchmark_plot.png'
-    out.parent.mkdir(parents=True, exist_ok=True)
+    seq     = Path(args.seq_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else seq / 'results'
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    def load(name):
-        p = seq / name
-        return load_tum(str(p)) if p.exists() else [np.array([])]*4
-
-    gt_ts,  gt_x,  gt_y,  _ = load('ground_truth.tum')
-    fc_ts,  fc_x,  fc_y,  _ = load('fusioncore.tum')
-    ek_ts,  ek_x,  ek_y,  _ = load('rl_ekf.tum')
-    uk_ts,  uk_x,  uk_y,  _ = load('rl_ukf.tum')
-    fcs_ts, fcs_x, fcs_y, _ = load('fusioncore_spike.tum')
-    eks_ts, eks_x, eks_y, _ = load('rl_ekf_spike.tum')
-
-    # ── Figure ───────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(18, 11), facecolor=BG)
-
-    # Layout: left col (trajectory) = 2 units, right col = 3 units wide × 2 rows
-    gs = fig.add_gridspec(
-        2, 3,
-        width_ratios=[2, 1.4, 1.4],
-        height_ratios=[1, 1],
-        hspace=0.52, wspace=0.38,
-        left=0.05, right=0.97, top=0.88, bottom=0.08,
-    )
-
-    ax_traj  = fig.add_subplot(gs[:, 0])   # left, full height
-    ax_ate   = fig.add_subplot(gs[0, 1])
-    ax_spike = fig.add_subplot(gs[1, 1])
-    ax_ukf   = fig.add_subplot(gs[0, 2])
-    ax_rpe   = fig.add_subplot(gs[1, 2])
-
-    # ── Master title ─────────────────────────────────────────────────────────
-    fig.text(0.5, 0.96, 'FusionCore  vs  robot_localization',
-             ha='center', fontsize=20, fontweight='bold', color=TEXT)
-    fig.text(0.5, 0.922,
-             'NCLT 2012-01-08  •  600 s  •  Ann Arbor campus  •  RTK GPS ground truth',
-             ha='center', fontsize=10.5, color=SUBTLE)
-
-    # ── Panel 1 — Trajectory ─────────────────────────────────────────────────
-    ax = ax_traj
-    card_bg(ax, BG)
-    section_label(ax, 'Route comparison — SE(2) aligned to ground truth')
-
-    if len(gt_x):
-        center = np.array([gt_x.mean(), gt_y.mean()])
-        gx, gy = gt_x - center[0], gt_y - center[1]
-
-        ax.plot(gx, gy, color=C_GT, lw=1.5, alpha=0.6, label='Ground Truth (RTK GPS)', zorder=1)
-
-        if len(fc_x):
-            fc_al = align_se2(np.stack([fc_x, fc_y], 1), np.stack([gt_x, gt_y], 1))
-            ax.plot(fc_al[:, 0] - center[0], fc_al[:, 1] - center[1],
-                    color=C_FC, lw=2.0, alpha=0.9, label='FusionCore', zorder=3)
-
-        if len(ek_x):
-            ek_al = align_se2(np.stack([ek_x, ek_y], 1), np.stack([gt_x, gt_y], 1))
-            ax.plot(ek_al[:, 0] - center[0], ek_al[:, 1] - center[1],
-                    color=C_EKF, lw=1.3, alpha=0.65, label='RL-EKF', zorder=2)
-
-        ax.plot(gx[0], gy[0], 'o', color=TEXT, ms=6, zorder=6)
-        ax.text(gx[0] + 10, gy[0] + 10, 'Start', fontsize=8, color=TEXT)
-
-    ax.set_aspect('equal')
-    ax.set_xlabel('East (m)', fontsize=9, color=SUBTLE)
-    ax.set_ylabel('North (m)', fontsize=9, color=SUBTLE)
-    ax.tick_params(colors=SUBTLE, labelsize=8)
-    for sp in ax.spines.values():
-        sp.set_edgecolor(BORDER)
-    ax.set_facecolor(BG)
-    ax.grid(color=BORDER, lw=0.6, zorder=0)
-
-    leg = ax.legend(fontsize=9, loc='upper left',
-                    facecolor='white', edgecolor=BORDER,
-                    framealpha=1.0)
-    for t in leg.get_texts():
-        t.set_color(TEXT)
-
-    # big win annotation on trajectory
-    ax.text(0.5, -0.08,
-            'FusionCore stays on route.  RL-EKF visibly drifts.',
-            transform=ax.transAxes, ha='center', fontsize=10,
-            color=SUBTLE, style='italic')
-
-    # ── Panel 2 — ATE bar chart ───────────────────────────────────────────────
-    ax = ax_ate
-    card_bg(ax)
-    section_label(ax, 'Absolute Trajectory Error (ATE)')
-
-    vals = [5.517, 23.434]
-    cols = [C_FC, C_EKF]
-    names = ['FusionCore', 'RL-EKF']
-
-    bars = ax.bar(names, vals, color=cols, width=0.5, zorder=3,
-                  edgecolor='none')
-
-    # light background on FC bar to highlight winner
-    ax.bar(['FusionCore'], [vals[0]], color=BLUE_L, width=0.5, zorder=2, edgecolor='none')
-    ax.bar(['FusionCore'], [vals[0]], color=C_FC, width=0.5, zorder=3, edgecolor='none')
-    ax.bar(['RL-EKF'],     [vals[1]], color=RED_L, width=0.5, zorder=2, edgecolor='none')
-    ax.bar(['RL-EKF'],     [vals[1]], color=C_EKF, width=0.5, zorder=3, edgecolor='none')
-
-    for bar, val, name in zip(bars, vals, names):
-        ax.text(bar.get_x() + bar.get_width()/2, val + 0.4,
-                f'{val:.1f} m', ha='center', va='bottom',
-                color=TEXT, fontsize=13, fontweight='bold')
-
-    # 4.2× callout
-    mid = (vals[0] + vals[1]) / 2
-    ax.annotate('', xy=(1, vals[0]+1), xytext=(1, vals[1]-1),
-                arrowprops=dict(arrowstyle='<->', color=SUBTLE, lw=1.5))
-    ax.text(1.3, mid, '4.2×\nmore\naccurate', ha='left', va='center',
-            color=TEXT, fontsize=10, fontweight='bold', linespacing=1.3)
-
-    ax.set_ylim(0, vals[1] * 1.35)
-    ax.set_ylabel('RMSE (m)', fontsize=9, color=SUBTLE)
-    ax.tick_params(colors=SUBTLE, labelsize=9)
-    ax.tick_params(axis='x', colors=TEXT, labelsize=10)
-    ax.grid(axis='y', color=BORDER, lw=0.6, zorder=0)
-    for sp in ax.spines.values():
-        sp.set_edgecolor(BORDER)
-
-    verdict_badge(ax, 0.03, 0.92, '✓  Winner', good=True, fontsize=8)
-
-    # ── Panel 3 — GPS spike ───────────────────────────────────────────────────
-    ax = ax_spike
-    card_bg(ax)
-    section_label(ax, 'GPS spike rejection  —  707 m fake fix injected at t=120 s')
-
-    SPIKE_T = 120.0
-    if len(gt_ts) and len(fcs_ts):
-        t0 = gt_ts[0]
-
-        def plot_err(ts, x, y, color, label, lw=1.8):
-            if not len(ts):
-                return
-            rel = ts - t0
-            errs = interp_error(ts, x, y, gt_ts, gt_x, gt_y)
-            mask = (rel >= SPIKE_T - 35) & (rel <= SPIKE_T + 45)
-            ax.plot(rel[mask] - SPIKE_T, errs[mask], color=color, lw=lw, label=label)
-
-        plot_err(fcs_ts, fcs_x, fcs_y, C_FC,  'FusionCore')
-        plot_err(eks_ts, eks_x, eks_y, C_EKF, 'RL-EKF', lw=1.4)
-
-    ax.axvline(0, color='#EF4444', lw=1.6, ls='--', alpha=0.8)
-    ax.text(1, ax.get_ylim()[1] * 0.97 if ax.get_ylim()[1] > 1 else 10,
-            '← spike', color='#EF4444', fontsize=8, va='top')
-
-    ax.set_xlabel('Seconds relative to spike injection', fontsize=8.5, color=SUBTLE)
-    ax.set_ylabel('Position error vs GT (m)', fontsize=8.5, color=SUBTLE)
-    ax.tick_params(colors=SUBTLE, labelsize=8)
-    ax.grid(color=BORDER, lw=0.5, zorder=0)
-    for sp in ax.spines.values():
-        sp.set_edgecolor(BORDER)
-
-    leg = ax.legend(fontsize=8, facecolor='white', edgecolor=BORDER)
-    for t in leg.get_texts():
-        t.set_color(TEXT)
-
-    # outcome badges
-    verdict_badge(ax, 0.03, 0.88, '✓ FC: +1 m — REJECTED', good=True, fontsize=7.5)
-    verdict_badge(ax, 0.03, 0.73, '✗ EKF: +93 m — JUMPED', good=False, fontsize=7.5)
-
-    # ── Panel 4 — RL-UKF divergence ───────────────────────────────────────────
-    ax = ax_ukf
-    card_bg(ax)
-    section_label(ax, 'RL-UKF numerical stability')
-
-    if len(uk_ts):
-        t0 = uk_ts[0]
-        rel = uk_ts - t0
-        mag = np.hypot(uk_x, uk_y)
-        ax.plot(rel, mag / 1e12, color=C_UKF, lw=1.8, label='RL-UKF')
-
-    if len(fc_ts):
-        t0f = fc_ts[0]
-        fc_rel = fc_ts - t0f
-        fc_mag = np.hypot(fc_x, fc_y)
-        mask = fc_rel <= 60
-        # normalize to same scale for comparison — show as near-zero
-        ax.plot(fc_rel[mask], fc_mag[mask] / 1e12, color=C_FC, lw=1.4,
-                alpha=0.7, label='FusionCore (stable)')
-
-    ax.axvline(31, color='#EF4444', lw=1.6, ls='--', alpha=0.8)
-    ax.text(32.5, ax.get_ylim()[1] * 0.85 if ax.get_ylim()[1] > 0 else 1,
-            'Explodes\nt = 31 s', color='#EF4444', fontsize=8, va='top')
-
-    ax.set_xlim(0, 60)
-    ax.set_xlabel('Time (s)', fontsize=8.5, color=SUBTLE)
-    ax.set_ylabel('Position magnitude (×10¹² m)', fontsize=8, color=SUBTLE)
-    ax.tick_params(colors=SUBTLE, labelsize=8)
-    ax.grid(color=BORDER, lw=0.5, zorder=0)
-    for sp in ax.spines.values():
-        sp.set_edgecolor(BORDER)
-
-    leg = ax.legend(fontsize=8, facecolor='white', edgecolor=BORDER)
-    for t in leg.get_texts():
-        t.set_color(TEXT)
-
-    verdict_badge(ax, 0.03, 0.88, '✗ Dead in 31 seconds', good=False, fontsize=8)
-
-    # ── Panel 5 — RPE summary (text card) ─────────────────────────────────────
-    ax = ax_rpe
-    card_bg(ax)
-    ax.axis('off')
-    section_label(ax, 'Relative Pose Error (per 10 m segment)')
-
-    rows = [
-        ('FusionCore',       '16.1 m',  C_FC,  True),
-        ('RL-EKF',           '18.8 m',  C_EKF, False),
-        ('RL-UKF',           'DIVERGED', C_UKF, False),
-    ]
-
-    y = 0.78
-    for name, val, color, winner in rows:
-        ax.text(0.08, y, '●', transform=ax.transAxes,
-                color=color, fontsize=14, va='center')
-        ax.text(0.20, y, name, transform=ax.transAxes,
-                fontsize=10, color=TEXT, va='center', fontweight='bold' if winner else 'normal')
-        ax.text(0.72, y, val, transform=ax.transAxes,
-                fontsize=10, color=color, va='center', fontweight='bold',
-                ha='right')
-        y -= 0.22
-
-    ax.text(0.08, 0.12,
-            'RPE measures local segment accuracy.\n'
-            'Both filters share the same wheel odometry\n'
-            'source — gap reflects GPS fusion quality.',
-            transform=ax.transAxes, fontsize=8, color=SUBTLE,
-            va='bottom', linespacing=1.6)
-
-    ax.plot([0.05, 0.95], [0.36, 0.36], color=BORDER, lw=1.0,
-            transform=ax.transAxes, clip_on=False)
-
-    # ── Footer ────────────────────────────────────────────────────────────────
-    fig.text(0.5, 0.025,
-             'Sensor inputs identical across all filters  •  Evaluation: evo  •  SE(3) alignment  •  github.com/manankharwar/fusioncore',
-             ha='center', fontsize=8, color=SUBTLE)
-
-    fig.savefig(str(out), dpi=160, bbox_inches='tight', facecolor=BG)
-    plt.close(fig)
-    print(f'Saved → {out}')
+    print('Generating benchmark charts...')
+    plot_trajectory(seq, out_dir)
+    plot_ate(out_dir)
+    plot_spike(seq, out_dir)
+    plot_ukf(seq, out_dir)
+    print(f'Done. All charts saved to {out_dir}/')
 
 
 if __name__ == '__main__':
