@@ -142,8 +142,8 @@ def plot_trajectory(seq, out_dir):
     xlo, xhi = all_x.min() - pad, all_x.max() + pad
     ylo, yhi = all_y.min() - pad, all_y.max() + pad
 
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 16), facecolor=BG)
-    fig.subplots_adjust(left=0.1, right=0.95, top=0.94, bottom=0.04, hspace=0.08)
+    fig, (ax_top, ax_bot) = plt.subplots(1, 2, figsize=(18, 10), facecolor=BG)
+    fig.subplots_adjust(left=0.06, right=0.97, top=0.93, bottom=0.07, wspace=0.08)
 
     fig.text(0.5, 0.97, 'Route Accuracy — 600 s Campus Drive',
              ha='center', fontsize=17, fontweight='bold', color=TEXT)
@@ -173,7 +173,7 @@ def plot_trajectory(seq, out_dir):
     plot_gt(ax_top)
     ax_top.plot(ek_al[0, 0], ek_al[0, 1], 'o', color=TEXT, ms=6, zorder=5)
     ax_top.set_ylabel('North (m)', fontsize=10, color=MUTED)
-    ax_top.tick_params(labelbottom=False)
+    ax_top.tick_params(labelbottom=True)
     leg = ax_top.legend(fontsize=10, loc='upper left',
                         facecolor='white', edgecolor=BORDER, framealpha=1)
     for t in leg.get_texts(): t.set_color(TEXT)
@@ -186,7 +186,7 @@ def plot_trajectory(seq, out_dir):
     plot_gt(ax_bot)
     ax_bot.plot(fc_al[0, 0], fc_al[0, 1], 'o', color=TEXT, ms=6, zorder=5)
     ax_bot.set_xlabel('East (m)', fontsize=10, color=MUTED)
-    ax_bot.set_ylabel('North (m)', fontsize=10, color=MUTED)
+    ax_bot.tick_params(labelleft=False)
     leg = ax_bot.legend(fontsize=10, loc='upper left',
                         facecolor='white', edgecolor=BORDER, framealpha=1)
     for t in leg.get_texts(): t.set_color(TEXT)
