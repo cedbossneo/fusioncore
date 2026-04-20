@@ -719,11 +719,13 @@ private:
 
     // Zero-velocity update (ZUPT): when the robot is stationary, assert
     // [VX=0, VY=0, WZ=0] with tight noise to suppress IMU drift.
-    // Uses encoder velocity AND current UKF angular rate for detection.
+    // Use encoder measurements for detection, NOT the filter's WZ state.
+    // The filter's WZ state is inflated by process noise (q_angular_vel = 0.1
+    // per step, unscaled by dt) and can exceed the threshold even when the
+    // robot is stationary, causing ZUPT to stop firing and yaw to drift.
     if (zupt_enabled_) {
       double speed = std::sqrt(vx*vx + vy*vy);
-      double yaw_rate = std::abs(fc_->get_state().x[fusioncore::WZ]);
-      if (speed < zupt_velocity_threshold_ && yaw_rate < zupt_angular_threshold_) {
+      if (speed < zupt_velocity_threshold_ && std::abs(wz) < zupt_angular_threshold_) {
         fc_->update_zupt(t, zupt_noise_sigma_);
       }
     }
