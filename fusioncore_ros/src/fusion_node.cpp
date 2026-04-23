@@ -99,6 +99,14 @@ public:
     declare_parameter("gnss.heading_noise",  0.02);
     declare_parameter("gnss.max_hdop",       4.0);
     declare_parameter("gnss.min_satellites", 4);
+    // Per-fix-type σ_xy floor. u-blox reports tight covariance even for
+    // non-RTK fixes; these floors reflect realistic horizontal accuracy
+    // per class and stop SBAS drift from dragging the UKF position state.
+    // Set to 0 to disable for that class.
+    declare_parameter("gnss.cov_floor_xy_fixed", 0.02);
+    declare_parameter("gnss.cov_floor_xy_float", 0.10);
+    declare_parameter("gnss.cov_floor_xy_dgps",  0.50);
+    declare_parameter("gnss.cov_floor_xy_gps",   2.00);
     // Minimum fix type for GNSS fusion: 1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED
     // Note: NavSatFix status only goes up to 2 (GBAS) which maps to RTK_FIXED.
     // RTK_FLOAT (3) is unreachable via NavSatFix alone.
@@ -233,6 +241,20 @@ public:
     config.gnss.heading_noise  = get_parameter("gnss.heading_noise").as_double();
     config.gnss.max_hdop       = get_parameter("gnss.max_hdop").as_double();
     config.gnss.min_satellites = get_parameter("gnss.min_satellites").as_int();
+    config.gnss.cov_floor_xy_fixed =
+        get_parameter("gnss.cov_floor_xy_fixed").as_double();
+    config.gnss.cov_floor_xy_float =
+        get_parameter("gnss.cov_floor_xy_float").as_double();
+    config.gnss.cov_floor_xy_dgps  =
+        get_parameter("gnss.cov_floor_xy_dgps").as_double();
+    config.gnss.cov_floor_xy_gps   =
+        get_parameter("gnss.cov_floor_xy_gps").as_double();
+    RCLCPP_INFO(get_logger(),
+                "GNSS σ_xy floors (m): fixed=%.2f float=%.2f dgps=%.2f gps=%.2f",
+                config.gnss.cov_floor_xy_fixed,
+                config.gnss.cov_floor_xy_float,
+                config.gnss.cov_floor_xy_dgps,
+                config.gnss.cov_floor_xy_gps);
     min_fix_type_ = static_cast<fusioncore::sensors::GnssFixType>(
         get_parameter("gnss.min_fix_type").as_int());
     config.gnss.min_fix_type = min_fix_type_;

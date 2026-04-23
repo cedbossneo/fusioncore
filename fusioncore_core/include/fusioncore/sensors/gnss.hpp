@@ -66,6 +66,30 @@ struct GnssParams {
   double max_vdop      = 6.0;
   int    min_satellites = 4;
 
+  // Per-fix-type minimum standard-deviation floors for the horizontal
+  // position channel. Applied AFTER any covariance source (full-matrix,
+  // diagonal, HDOP estimate).
+  //
+  // Why floors exist:
+  //   Some u-blox modules report tight position_covariance (σ ~5 mm) even
+  //   for non-RTK fixes (SBAS/DGPS), which is optimistic by 2-3 orders of
+  //   magnitude vs real accuracy. Trusting the receiver covariance blindly
+  //   lets non-RTK drift pull the UKF position state hard, while K-ICP /
+  //   wheels correctly reporting zero velocity have no way to object
+  //   (velocity and position are correlated through the process model but
+  //   the GNSS update dominates when weighted by 5 mm).
+  //
+  // Defaults roughly match published accuracies:
+  //   RTK_FIXED: 2 cm  — fresh carrier-phase solution
+  //   RTK_FLOAT: 10 cm — partial ambiguity resolution
+  //   DGPS:      50 cm — SBAS/GBAS code-phase
+  //   GPS:       200 cm — unaided single-point
+  // Set to 0 to disable flooring for that class.
+  double cov_floor_xy_fixed = 0.02;
+  double cov_floor_xy_float = 0.10;
+  double cov_floor_xy_dgps  = 0.50;
+  double cov_floor_xy_gps   = 2.00;
+
   // Minimum fix type required for fusion (default: any fix accepted).
   // Set to RTK_FLOAT or RTK_FIXED to reject non-RTK fixes.
   GnssFixType min_fix_type = GnssFixType::GPS_FIX;
@@ -181,29 +205,65 @@ inline GnssHdgMeasurement gnss_hdg_measurement_function(const StateVector& x) {
 
 // ─── Noise matrices ───────────────────────────────────────────────────────────
 
+// Per-fix-type horizontal σ floor. Returns 0 if flooring disabled for this class.
+inline double cov_floor_xy_for(const GnssParams& p, GnssFixType t)
+{
+  switch (t) {
+    case GnssFixType::RTK_FIXED: return p.cov_floor_xy_fixed;
+    case GnssFixType::RTK_FLOAT: return p.cov_floor_xy_float;
+    case GnssFixType::DGPS_FIX:  return p.cov_floor_xy_dgps;
+    case GnssFixType::GPS_FIX:   return p.cov_floor_xy_gps;
+    default:                     return 0.0;
+  }
+}
+
+// Apply fix-type-dependent horizontal σ floor to a 3x3 position covariance.
+// If the floor is larger than the current sigma on either axis, replace the
+// diagonal to match the floor while leaving off-diagonals intact (keeping any
+// correlation direction). Covariance mixed with off-diagonals stays SPD as
+// long as we only grow the diagonals.
+inline void apply_cov_floor_xy(GnssPosNoiseMatrix& R, double floor_sigma)
+{
+  if (floor_sigma <= 0.0) return;
+  const double floor_var = floor_sigma * floor_sigma;
+  if (R(0,0) < floor_var) R(0,0) = floor_var;
+  if (R(1,1) < floor_var) R(1,1) = floor_var;
+}
+
 inline GnssPosNoiseMatrix gnss_pos_noise_matrix(
   const GnssParams& p,
   const GnssFix& fix)
 {
+  GnssPosNoiseMatrix R;
+
   // peci1 fix: use full covariance matrix when available.
   // Real GNSS receivers often report correlated X/Y errors:
   // the off-diagonal elements matter, especially with RTK.
-  if (fix.has_full_covariance) {
-    // Validate: all diagonal elements must be positive
-    if (fix.full_covariance(0,0) > 0.0 &&
-        fix.full_covariance(1,1) > 0.0 &&
-        fix.full_covariance(2,2) > 0.0) {
-      return fix.full_covariance;
-    }
+  bool used_full = false;
+  if (fix.has_full_covariance &&
+      fix.full_covariance(0,0) > 0.0 &&
+      fix.full_covariance(1,1) > 0.0 &&
+      fix.full_covariance(2,2) > 0.0) {
+    R = fix.full_covariance;
+    used_full = true;
   }
 
-  // Fall back to diagonal estimate from HDOP/VDOP
-  GnssPosNoiseMatrix R = GnssPosNoiseMatrix::Zero();
-  double sigma_xy = p.base_noise_xy * fix.hdop;
-  double sigma_z  = p.base_noise_z  * fix.vdop;
-  R(0,0) = sigma_xy * sigma_xy;
-  R(1,1) = sigma_xy * sigma_xy;
-  R(2,2) = sigma_z  * sigma_z;
+  if (!used_full) {
+    // Fall back to diagonal estimate from HDOP/VDOP
+    R = GnssPosNoiseMatrix::Zero();
+    double sigma_xy = p.base_noise_xy * fix.hdop;
+    double sigma_z  = p.base_noise_z  * fix.vdop;
+    R(0,0) = sigma_xy * sigma_xy;
+    R(1,1) = sigma_xy * sigma_xy;
+    R(2,2) = sigma_z  * sigma_z;
+  }
+
+  // Always apply the fix-type-dependent horizontal floor. Non-RTK receivers
+  // commonly under-report covariance; the floor reflects real per-fix-type
+  // accuracy and keeps the UKF from chasing SBAS drift pretending to be
+  // millimeter-accurate.
+  apply_cov_floor_xy(R, cov_floor_xy_for(p, fix.fix_type));
+
   return R;
 }
 
