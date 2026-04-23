@@ -728,29 +728,33 @@ bool FusionCore::apply_gnss_update(
       const double vy = (fix.y - prev_gnss_fix_y_) / dt;
       const double speed = std::sqrt(vx * vx + vy * vy);
       const double wz = ukf_.state().x[WZ];
+      const double body_vx = ukf_.state().x[VX];
+      const double lx = fix.lever_arm.x;
+      const double ly = fix.lever_arm.y;
+
+      // Antenna motion in ENU = base_link motion + ω × lever_arm(world).
+      // In body frame: antenna_vel = (body_vx - ω*ly, ω*lx) for a diff-drive
+      // (body_vy = 0). That gives antenna a direction angle, relative to
+      // body forward, of atan2(ω*lx, body_vx - ω*ly).
+      // World-frame measured heading = body_yaw + that body-frame offset.
+      // → body_yaw = atan2(vy, vx) - atan2(ω*lx, body_vx - ω*ly)
+      // atan2 handles forward vs reverse via the sign of body_vx
+      // automatically, so no separate 180° flip is needed.
+      //
+      // Signal magnitude for gating: sqrt((body_vx - ω*ly)² + (ω*lx)²).
+      // This is the expected |antenna_vel| and we gate on it instead of
+      // raw GPS speed — when body_vx is near zero but ω is non-zero,
+      // antenna still moves (tangentially), but the direction is
+      // perpendicular to body yaw and not useful; skip those cases.
+      const double eff_vx = body_vx - wz * ly;
+      const double body_offset = std::atan2(wz * lx, eff_vx);
+      const double signal = std::hypot(eff_vx, wz * lx);
+
       if (speed > config_.gnss.velocity_heading_min_speed
-          && std::abs(wz) < config_.gnss.velocity_heading_max_wz) {
-        // Heading = direction of antenna motion in ENU.
-        // When the robot reverses, antenna motion points OPPOSITE to
-        // robot heading — flip by π. Use a HYSTERETIC reverse test
-        // (|VX| > 0.05 m/s) so we don't thrash the measurement near
-        // zero-forward-velocity. When VX is near zero, the motion is
-        // ambiguous (could be noise) and we drop this sample entirely
-        // to avoid injecting 180°-flipped headings.
-        constexpr double kReverseHysteresis = 0.05;
-        const double body_vx = ukf_.state().x[VX];
-        if (std::abs(body_vx) < kReverseHysteresis) {
-          // Skip: ambiguous direction, not worth a heading fix.
-          prev_gnss_fix_x_    = fix.x;
-          prev_gnss_fix_y_    = fix.y;
-          prev_gnss_fix_time_ = timestamp_seconds;
-          have_prev_gnss_fix_ = true;
-          return true;
-        }
-        double heading_meas = std::atan2(vy, vx);
-        if (body_vx < 0.0) {
-          heading_meas = std::atan2(-vy, -vx);
-        }
+          && signal > 0.10  // minimum body-frame signal — skip ambiguous turns
+          && std::abs(body_vx) > config_.gnss.velocity_heading_min_speed - 0.1)
+      {
+        const double heading_meas = std::atan2(vy, vx) - body_offset;
         // Inline heading update — use GPS_TRACK as source (not DUAL_ANTENNA,
         // which update_gnss_heading would mark). GPS_TRACK also enables
         // lever-arm application for future position updates.
