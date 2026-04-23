@@ -730,11 +730,23 @@ bool FusionCore::apply_gnss_update(
       const double wz = ukf_.state().x[WZ];
       if (speed > config_.gnss.velocity_heading_min_speed
           && std::abs(wz) < config_.gnss.velocity_heading_max_wz) {
+        // Heading = direction of antenna motion in ENU.
+        // When the robot reverses (body-frame VX < 0), that direction
+        // points OPPOSITE to robot heading — flip by π so the fused
+        // measurement still tracks body yaw instead of 180°-flipping
+        // the UKF every time the controller commands a reverse.
+        // Body-frame VX comes from the wheel encoder (chassis-mounted,
+        // sign is absolute forward/reverse), so it's the right
+        // authority for the reverse test.
+        double heading_meas = std::atan2(vy, vx);
+        if (ukf_.state().x[VX] < 0.0) {
+          heading_meas = std::atan2(-vy, -vx);  // equivalent to +π, wrapped
+        }
         // Inline heading update — use GPS_TRACK as source (not DUAL_ANTENNA,
         // which update_gnss_heading would mark). GPS_TRACK also enables
         // lever-arm application for future position updates.
         sensors::GnssHdgMeasurement z_hdg;
-        z_hdg[0] = std::atan2(vy, vx);
+        z_hdg[0] = heading_meas;
         sensors::GnssHdgNoiseMatrix R_hdg;
         R_hdg(0, 0) = config_.gnss.velocity_heading_sigma
                     * config_.gnss.velocity_heading_sigma;
