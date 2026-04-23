@@ -69,5 +69,39 @@ inline GroundConstraintNoiseMatrix ground_constraint_noise_matrix() {
   return R;
 }
 
+// ─── Non-holonomic constraint (VY = 0 in body frame) ─────────────────────────
+// Differential-drive and Ackermann robots cannot translate laterally in the
+// body frame — the wheels physically prevent it. Without this constraint, the
+// UKF can develop non-zero VY during rapid rotation: GPS+lever-arm updates
+// push base_link position around as the antenna traces a circle, and if the
+// yaw estimate lags the true yaw even a few degrees, the mis-sized lever-arm
+// correction bleeds into body-frame lateral velocity. Symptom in Foxglove:
+// robot appears to "slide sideways" while physically rotating in place.
+//
+// The encoder measurement function already outputs x[VY] as one of its three
+// channels with vy=0 as the assumed measurement, but at the encoder's loose
+// σ_vy (~0.15 m/s) the constraint is too weak to suppress the GPS-driven
+// lateral leak. A dedicated tighter pseudo-measurement fixes that.
+
+constexpr int NONHOLONOMIC_DIM = 1;
+using NonholonomicMeasurement  = Eigen::Matrix<double, NONHOLONOMIC_DIM, 1>;
+using NonholonomicNoiseMatrix  = Eigen::Matrix<double, NONHOLONOMIC_DIM, NONHOLONOMIC_DIM>;
+
+// h(x): body-frame lateral velocity (must be zero for diff-drive / Ackermann).
+inline NonholonomicMeasurement nonholonomic_measurement_function(const StateVector& x) {
+  NonholonomicMeasurement z;
+  z[0] = x[VY];
+  return z;
+}
+
+// Noise matrix from a single σ_vy. Default 0.02 m/s (2 cm/s) is tight enough
+// to clamp lateral state but loose enough to tolerate small numerical noise
+// and genuine encoder slip during high-speed turns.
+inline NonholonomicNoiseMatrix nonholonomic_noise_matrix(double sigma_vy) {
+  NonholonomicNoiseMatrix R;
+  R(0,0) = sigma_vy * sigma_vy;
+  return R;
+}
+
 } // namespace sensors
 } // namespace fusioncore

@@ -86,6 +86,12 @@ public:
     declare_parameter("encoder.vel_noise", 0.05);
     declare_parameter("encoder.yaw_noise", 0.02);
 
+    // Non-holonomic constraint: VY=0 in body frame. Default on for diff-drive.
+    // sigma_vy 0.02 m/s clamps the lateral-slip leak caused by GPS+lever-arm
+    // during rotation without destabilising the filter numerically.
+    declare_parameter("nonholonomic.enabled",  true);
+    declare_parameter("nonholonomic.sigma_vy", 0.02);
+
     // Optional second encoder-twist source (e.g. KISS-ICP LiDAR odometry).
     // When non-empty, FusionCore subscribes to this topic as nav_msgs/Odometry
     // and fuses twist.linear.x/y + twist.angular.z using the same update_encoder
@@ -336,6 +342,13 @@ public:
     zupt_velocity_threshold_ = get_parameter("zupt.velocity_threshold").as_double();
     zupt_angular_threshold_  = get_parameter("zupt.angular_threshold").as_double();
     zupt_noise_sigma_        = get_parameter("zupt.noise_sigma").as_double();
+
+    nonholonomic_enabled_  = get_parameter("nonholonomic.enabled").as_bool();
+    nonholonomic_sigma_vy_ = get_parameter("nonholonomic.sigma_vy").as_double();
+    RCLCPP_INFO(get_logger(),
+                "Non-holonomic constraint: %s (σ_vy=%.3f m/s)",
+                nonholonomic_enabled_ ? "ENABLED" : "disabled",
+                nonholonomic_sigma_vy_);
 
     fc_ = std::make_unique<fusioncore::FusionCore>(config);
 
@@ -838,6 +851,14 @@ private:
     // Non-holonomic ground constraint: wheeled robots cannot move vertically.
     // Fuses VZ=0 as a pseudo-measurement to prevent altitude drift.
     fc_->update_ground_constraint(t);
+
+    // Non-holonomic lateral constraint: diff-drive wheels cannot translate
+    // laterally. Fuses VY=0 with tight sigma to stop GPS+lever-arm from
+    // pushing body-frame vy non-zero during rotation (the "robot sliding
+    // sideways in rviz" artefact).
+    if (nonholonomic_enabled_) {
+      fc_->update_nonholonomic_constraint(t, nonholonomic_sigma_vy_);
+    }
 
     // Zero-velocity update (ZUPT): when the robot is stationary, assert
     // [VX=0, VY=0, WZ=0] with tight noise to suppress IMU drift.
@@ -1530,6 +1551,9 @@ private:
   double zupt_velocity_threshold_ = 0.05;
   double zupt_angular_threshold_  = 0.05;
   double zupt_noise_sigma_        = 0.01;
+
+  bool   nonholonomic_enabled_  = true;
+  double nonholonomic_sigma_vy_ = 0.02;
 
   // Callback groups: sensor callbacks are mutually exclusive (protect UKF state);
   // publish timer runs in its own group so it never waits on a sensor callback.

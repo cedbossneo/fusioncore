@@ -572,6 +572,30 @@ void FusionCore::update_ground_constraint(double timestamp_seconds) {
   ukf_.update<1>(z_az, h_az, R_az);
 }
 
+void FusionCore::update_nonholonomic_constraint(
+  double timestamp_seconds,
+  double sigma_vy
+) {
+  if (!initialized_) return;
+
+  // Force a minimal predict step so Q is injected into P before this update
+  // — same rationale as update_ground_constraint: prevents Cholesky failure
+  // when chained with update_encoder at the same tick (two consecutive P
+  // reductions without covariance recovery in between).
+  // Do NOT advance last_timestamp_ — the 1 µs UKF-time slip is negligible,
+  // and advancing would cause the next GNSS message to be misclassified as
+  // delayed.
+  (void)timestamp_seconds;
+  ukf_.predict(config_.min_dt);
+
+  // ── VY = 0: body-frame lateral velocity must be zero for diff-drive ──
+  sensors::NonholonomicMeasurement z;
+  z[0] = 0.0;
+  sensors::NonholonomicNoiseMatrix R = sensors::nonholonomic_noise_matrix(sigma_vy);
+  ukf_.update<sensors::NONHOLONOMIC_DIM>(
+    z, sensors::nonholonomic_measurement_function, R);
+}
+
 void FusionCore::update_zupt(double timestamp_seconds, double noise_sigma) {
   if (!initialized_) return;
 

@@ -160,6 +160,19 @@ public:
   // Only applies to wheeled ground robots; do not call for aerial vehicles.
   void update_ground_constraint(double timestamp_seconds);
 
+  // Non-holonomic lateral constraint: fuses VY=0 as a pseudo-measurement
+  // with tight sigma. Prevents body-frame lateral slip estimate during
+  // rotation when GPS+lever-arm updates would otherwise push VY non-zero
+  // (visible in rviz/foxglove as the robot "sliding sideways"). Only call
+  // for diff-drive / Ackermann (anything whose wheels prevent lateral
+  // motion); skip for omnidirectional robots.
+  //
+  // sigma_vy: body-frame lateral velocity uncertainty (m/s). Defaults to
+  // 0.02 m/s — tight enough to clamp the leak, loose enough to stay
+  // numerically stable when chained with other updates at the same tick.
+  void update_nonholonomic_constraint(double timestamp_seconds,
+                                      double sigma_vy = 0.02);
+
   // Zero-velocity update (ZUPT): fuses [VX=0, VY=0, WZ=0] with tight noise
   // when the robot is stationary. Prevents IMU drift from corrupting velocity
   // states during standstill. Call this when encoder velocity is near zero.
