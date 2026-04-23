@@ -204,6 +204,14 @@ private:
   double last_gnss_time_    = -1.0;
   int    update_count_      = 0;
 
+  // Cache the previous GNSS fix position + time so apply_gnss_update can
+  // derive an antenna-velocity heading from position deltas. Used by the
+  // GPS-velocity heading channel (OpenMower-style continuous yaw anchor).
+  bool   have_prev_gnss_fix_{false};
+  double prev_gnss_fix_x_{0.0};
+  double prev_gnss_fix_y_{0.0};
+  double prev_gnss_fix_time_{-1.0};
+
   // ─── Adaptive noise covariance ───────────────────────────────────────────
   // Tracks a sliding window of innovations per sensor.
   // Estimates actual noise from innovation sequence.

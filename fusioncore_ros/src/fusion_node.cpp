@@ -113,6 +113,13 @@ public:
     declare_parameter("gnss.cov_floor_xy_float", 0.10);
     declare_parameter("gnss.cov_floor_xy_dgps",  0.50);
     declare_parameter("gnss.cov_floor_xy_gps",   2.00);
+    // GPS-velocity heading — continuous yaw anchor from atan2(Δy, Δx)
+    // between sequential GPS fixes, gated on |v| > min_speed and
+    // |wz| < max_wz. See sensors/gnss.hpp for the why.
+    declare_parameter("gnss.velocity_heading.enabled",   true);
+    declare_parameter("gnss.velocity_heading.min_speed", 0.20);
+    declare_parameter("gnss.velocity_heading.max_wz",    0.30);
+    declare_parameter("gnss.velocity_heading.sigma",     0.15);
     // Minimum fix type for GNSS fusion: 1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED
     // Note: NavSatFix status only goes up to 2 (GBAS) which maps to RTK_FIXED.
     // RTK_FLOAT (3) is unreachable via NavSatFix alone.
@@ -261,6 +268,21 @@ public:
                 config.gnss.cov_floor_xy_float,
                 config.gnss.cov_floor_xy_dgps,
                 config.gnss.cov_floor_xy_gps);
+
+    config.gnss.velocity_heading_enabled =
+        get_parameter("gnss.velocity_heading.enabled").as_bool();
+    config.gnss.velocity_heading_min_speed =
+        get_parameter("gnss.velocity_heading.min_speed").as_double();
+    config.gnss.velocity_heading_max_wz =
+        get_parameter("gnss.velocity_heading.max_wz").as_double();
+    config.gnss.velocity_heading_sigma =
+        get_parameter("gnss.velocity_heading.sigma").as_double();
+    RCLCPP_INFO(get_logger(),
+                "GNSS velocity heading: %s (min_speed=%.2fm/s, max_wz=%.2frad/s, σ=%.2frad)",
+                config.gnss.velocity_heading_enabled ? "ENABLED" : "disabled",
+                config.gnss.velocity_heading_min_speed,
+                config.gnss.velocity_heading_max_wz,
+                config.gnss.velocity_heading_sigma);
     min_fix_type_ = static_cast<fusioncore::sensors::GnssFixType>(
         get_parameter("gnss.min_fix_type").as_int());
     config.gnss.min_fix_type = min_fix_type_;

@@ -90,6 +90,30 @@ struct GnssParams {
   double cov_floor_xy_dgps  = 0.50;
   double cov_floor_xy_gps   = 2.00;
 
+  // ── GPS-velocity heading ──────────────────────────────────────────────────
+  // When the robot translates forward under RTK, the direction of motion in
+  // ENU is a direct, continuous yaw observation — drive at 0.3 m/s and
+  // atan2(Δy_enu, Δx_enu) gives body heading (up to a lever-arm error
+  // when combined with rotation, hence the wz gate). This is the yaw
+  // anchor that OpenMower's `updateOrientation2` provides; without it a
+  // cheap MEMS gyro has no continuous yaw correction and slowly drifts.
+  //
+  // Enabled by default for diff-drive without magnetometer. Disable for
+  // omnidirectional platforms or when GPS is unavailable.
+  bool   velocity_heading_enabled   = true;
+  double velocity_heading_min_speed = 0.20;  // m/s — below this, antenna
+                                             // motion can be dominated by
+                                             // rotation-induced tangential
+                                             // velocity (ω=0.5 rad/s,
+                                             // lever_arm=0.3 → 0.15 m/s).
+  double velocity_heading_max_wz    = 0.30;  // rad/s — if turning hard,
+                                             // antenna velocity direction
+                                             // diverges from body heading.
+  double velocity_heading_sigma     = 0.15;  // rad — yaw measurement σ.
+                                             // Loose enough not to fight
+                                             // IMU integration, tight
+                                             // enough to drag gyro back.
+
   // Minimum fix type required for fusion (default: any fix accepted).
   // Set to RTK_FLOAT or RTK_FIXED to reject non-RTK fixes.
   GnssFixType min_fix_type = GnssFixType::GPS_FIX;

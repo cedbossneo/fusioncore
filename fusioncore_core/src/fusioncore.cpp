@@ -712,6 +712,62 @@ bool FusionCore::apply_gnss_update(
 
   // Track innovation for adaptive GNSS noise estimation
   adapt_R<sensors::GNSS_POS_DIM>(R_gnss_, R_gnss_floor_, gnss_innovations_, innovation, config_.adaptive_gnss);
+
+  // ── GPS-velocity heading ────────────────────────────────────────────────
+  // When the robot translates (|v| > min_speed) and isn't spinning hard
+  // (|wz| < max_wz), compute antenna velocity from Δpos / Δt and use its
+  // direction as a direct yaw measurement. This is the continuous yaw
+  // anchor OpenMower's xbot_positioning::updateOrientation2 provides and
+  // the reason a cheap MEMS gyro doesn't drift over long runs on that
+  // stack. We gate on wz to avoid the case where the antenna's only motion
+  // is tangential-to-rotation (which points perpendicular to body yaw).
+  if (config_.gnss.velocity_heading_enabled && have_prev_gnss_fix_) {
+    const double dt = timestamp_seconds - prev_gnss_fix_time_;
+    if (dt > 1e-3 && dt < 1.0) {  // sane Δt window
+      const double vx = (fix.x - prev_gnss_fix_x_) / dt;
+      const double vy = (fix.y - prev_gnss_fix_y_) / dt;
+      const double speed = std::sqrt(vx * vx + vy * vy);
+      const double wz = ukf_.state().x[WZ];
+      if (speed > config_.gnss.velocity_heading_min_speed
+          && std::abs(wz) < config_.gnss.velocity_heading_max_wz) {
+        // Inline heading update — use GPS_TRACK as source (not DUAL_ANTENNA,
+        // which update_gnss_heading would mark). GPS_TRACK also enables
+        // lever-arm application for future position updates.
+        sensors::GnssHdgMeasurement z_hdg;
+        z_hdg[0] = std::atan2(vy, vx);
+        sensors::GnssHdgNoiseMatrix R_hdg;
+        R_hdg(0, 0) = config_.gnss.velocity_heading_sigma
+                    * config_.gnss.velocity_heading_sigma;
+        constexpr unsigned int HDG_ANGLE_DIMS = 0b1;
+
+        bool hdg_outlier = false;
+        if (config_.outlier_rejection) {
+          sensors::GnssHdgMeasurement inno_pre;
+          sensors::GnssHdgNoiseMatrix S_pre;
+          ukf_.predict_measurement<sensors::GNSS_HDG_DIM>(
+            z_hdg, sensors::gnss_hdg_measurement_function,
+            R_hdg, inno_pre, S_pre, HDG_ANGLE_DIMS);
+          if (is_outlier<sensors::GNSS_HDG_DIM>(
+                inno_pre, S_pre, config_.outlier_threshold_hdg)) {
+            ++hdg_outliers_;
+            hdg_outlier = true;
+          }
+        }
+        if (!hdg_outlier) {
+          ukf_.update<sensors::GNSS_HDG_DIM>(
+            z_hdg, sensors::gnss_hdg_measurement_function,
+            R_hdg, HDG_ANGLE_DIMS);
+          heading_validated_ = true;
+          heading_source_    = HeadingSource::GPS_TRACK;
+        }
+      }
+    }
+  }
+  prev_gnss_fix_x_    = fix.x;
+  prev_gnss_fix_y_    = fix.y;
+  prev_gnss_fix_time_ = timestamp_seconds;
+  have_prev_gnss_fix_ = true;
+
   return true;
 }
 
