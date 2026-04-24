@@ -750,8 +750,34 @@ bool FusionCore::apply_gnss_update(
       const double body_offset = std::atan2(wz * lx, eff_vx);
       const double signal = std::hypot(eff_vx, wz * lx);
 
+      // Robust gating against the failure mode observed in MowgliNext field
+      // session 2026-04-23 (7 yaw jumps >30° per run at vx=0.09-0.20 m/s):
+      //
+      //  1. speed > min_speed        — raw GPS displacement signal must
+      //                                be larger than per-fix noise floor.
+      //  2. std::abs(wz) < max_wz    — wz above this threshold means the
+      //                                lever-arm correction dominates the
+      //                                heading estimate; any small filter
+      //                                ω error then flips the computed
+      //                                heading. Previously-declared param
+      //                                that was not enforced.
+      //  3. |body_vx| > 3·|ω·lever|  — body-frame forward motion must
+      //                                dominate the antenna tangential
+      //                                component so body_offset errors
+      //                                from a miscalibrated ω stay bounded
+      //                                (~atan(ratio) worth of heading bias).
+      //  4. signal > 0.10            — expected antenna speed must exceed
+      //                                the GPS position-noise floor.
+      //  5. |body_vx| > min_speed-0.1 — forward vs reverse disambiguation.
+      const double lever_speed = std::hypot(wz * lx, wz * ly);
+      const bool body_dominant =
+          (lever_speed < 1e-6) ||
+          (std::abs(body_vx) > 3.0 * lever_speed);
+
       if (speed > config_.gnss.velocity_heading_min_speed
-          && signal > 0.10  // minimum body-frame signal — skip ambiguous turns
+          && std::abs(wz) < config_.gnss.velocity_heading_max_wz
+          && body_dominant
+          && signal > 0.10
           && std::abs(body_vx) > config_.gnss.velocity_heading_min_speed - 0.1)
       {
         const double heading_meas = std::atan2(vy, vx) - body_offset;
